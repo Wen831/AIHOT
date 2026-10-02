@@ -131,8 +131,8 @@ test("resumed extraction and analysis publish the fetched body at its current re
   const [publication] = await sql`SELECT eligible, visibility, title, summary FROM publications WHERE article_id = ${id}`;
   assert.equal(publication!.eligible, true);
   assert.equal(publication!.visibility, "public");
-  assert.match(String(publication!.title), /实验室/);
-  assert.match(String(publication!.summary), /评测/);
+  assert.match(String(publication!.title), /部门/);
+  assert.match(String(publication!.summary), /细则/);
   assert.ok(provider.hits() >= 5, "normal budgeted model stages used the local fixture");
 });
 
