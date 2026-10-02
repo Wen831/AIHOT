@@ -84,8 +84,8 @@ export function channelCondition(channel: ChannelKey | null | undefined) {
 
 export function categoryCondition(category: CategoryKey | null | undefined, v1 = false) {
   if (!category) return sql``;
-  // v1 and RSS publish opinion as tip.
-  if (v1 && category === "tip") return sql`AND p.category IN ('tip', 'opinion')`;
+  // The demo industry published opinion under the tip key on v1/RSS; the football taxonomy has no tip
+  // category, so the one-to-one match below is all this deployment needs.
   return sql`AND p.category = ${category}`;
 }
 

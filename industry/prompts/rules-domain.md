@@ -1,45 +1,46 @@
 
-【AI 领域翻译规则 — 本平台 100% 是 AI/ML/LLM 行业内容，严格遵守】
+【足球领域翻译与用词规则 — 本平台 100% 是足球行业内容，严格遵守】
 
-1. 歧义默认值：以下词在中文有非 AI 歧义，**一律按 AI 含义翻译**：
-   - LLM = 大语言模型（绝不译"法学硕士"/"Master of Laws"）
-   - Token / tokens = 模型 token（保留英文；绝不译"代币"/"令牌"）
-   - Transformer = Transformer 架构（保留英文；不译"变压器"）
-   - Diffusion = 扩散模型（AI 生成，不是物理扩散）
-   - Agent / Agentic = AI 智能体 / 智能体的（不译"代理人"/"中介"）
-   - Alignment = 对齐（AI 安全语境）
-   - Inference = 推理（模型生成）
-   - Reasoning = 推理（注意：与 inference 都译"推理"，必要时用"链式推理"区分 CoT；reasoning model 指 o1/o3/R1 这类思考型模型）
-   - Embedding = 嵌入向量（也可保留英文）
-   - Distillation = 知识蒸馏
-   - Hallucination = 模型幻觉
-   - Fine-tune / Fine-tuning = 微调
-   - Pretrain / Pretraining = 预训练
-   - Context window = 上下文窗口
-   - Prompt = 提示词
-   - Skill / Skills = 技能（Claude 等 Agent 框架的能力包，不译"特长"）
+1. 歧义默认值：以下词在中文有非足球歧义，**一律按足球含义理解**：
+   - Derby = 德比（同城或宿敌对决，不译“赛马比赛”）
+   - Transfer = 转会（球员流动，不是“换乘”）
+   - Cap / Wage cap = 工资帽
+   - Fixture = 赛程/对阵（不是“固定装置”）
+   - Injury = 伤病（球员受伤，不是“伤害”）
+   - Boss / Gaffer / Head coach = 主教练（足球语境）
+   - Deal / Move = 转会交易（不是普通“交易”）
+   - Loan = 租借
+   - Free agent / Free transfer = 自由身/自由转会
+   - Release clause = 解约金条款
+   - Aggregate = 两回合总比分
+   - Stoppage time / Added time = 伤停补时
 
-2. 以下专有名词**一律保留英文原文**，不翻译不加中文括注：
-   - AI 公司：OpenAI / Anthropic / Google DeepMind / xAI / Meta AI / Mistral / DeepSeek / Cohere / HuggingFace（HF）/ Runway / ElevenLabs / Suno / Pika / Midjourney / Perplexity
-   - 模型族（举例 + 通用规则）：GPT / Claude / Gemini / Llama / Qwen / Grok / o 系列 / DeepSeek / Mistral / Mixtral / Phi / Sora / Veo / Imagen
-     **规则**：任何大模型族名、产品代号一律保留英文
-   - 模型版本号（举例 + 通用规则）：GPT-5 / Claude 4.7 / Claude Sonnet 4.6 / Llama 4 / Gemini 3 / o3 / o4 / DeepSeek-V4 / Qwen3.7
-     **规则**：版本号一字不改（包括字母数字后缀如 4o / 4.7 / 405B / V4 / R1），绝不"翻译性扩写"（不要把 "405B" 译成 "4050 亿"，不要把 "V4" 译成 "第 4 代"）
-   - 技术缩写（举例 + 通用规则）：LLM / RAG / RLHF / DPO / LoRA / QLoRA / PEFT / MoE / CoT / ReAct / KV cache / SOTA / AGI / MCP / ADK / NPU / GPU / TPU
-     **规则**：任何 2-5 字母的全大写缩写，默认按 AI/ML 含义保留英文
-   - 评测基准（举例 + 通用规则）：MMLU / GPQA / HumanEval / SWE-bench / SWE-bench Verified / AIME / HLE / ARC-AGI / ARC-AGI 2 / MT-Bench / Chatbot Arena / Aider Polyglot / LiveCodeBench
-     **规则**：以 -bench / -eval 结尾或全大写的评测名一律保留英文
-   - AI 工具/产品：Cursor / Copilot / Codex / Aider / Devin / Cline / Claude Code / Windsurf / Zed / v0 / Bolt / Lovable / Replit Agent
-   - Agent 框架：LangChain / LangGraph / LlamaIndex / CrewAI / AutoGen / Pydantic AI / Vercel AI SDK / DSPy
-   - 推理/部署：Ollama / vLLM / SGLang / TensorRT / Triton / CUDA / ROCm
-   - 通用技术：API / SDK / CLI / IDE / SaaS / CDN / SSO / OAuth / JWT / WebSocket / SSE / gRPC
+2. 赛事名用通行简称，**不要写全称再缩写**：
+   - 欧冠（不写“欧洲冠军联赛”）、欧联、欧国联、世俱杯
+   - 英超、西甲、意甲、德甲、法甲（不写“英格兰足球超级联赛”等全称）
+   - 世界杯、欧洲杯、亚洲杯、世预赛（世界杯预选赛）、足总杯、国王杯、意大利杯、德国杯
+   - 中超、亚冠、足协杯
+   - 英冠（EFL Championship）、西乙、意乙等次级联赛用通行简称
 
-3. 中国厂商**优先用官方中文品牌名**（首次出现可双标"千问（Qwen3）"，后续选一种保持一致）：
-   - 千问（Qwen）/ 文心一言 / 智谱（GLM）/ 月之暗面（Kimi）/ 深度求索（DeepSeek）/ 阶跃星辰（Step）/ 零一万物（Yi）/ 百川 / 豆包（字节）/ 混元（腾讯）/ 可灵（Kling，快手）/ 即梦（Jimeng，字节）/ MiniMax（不译）/ 美团 LongCat / 昆仑万维 Skywork / 面壁 MiniCPM / 华为昇腾 / 寒武纪
+3. 球员与教练名**优先用通行中文译名**，无通行译名或原文为主时保留原文：
+   - 姆巴佩（Kylian Mbappé）、哈兰德（Erling Haaland）、贝林厄姆（Jude Bellingham）、维尼修斯（Vinícius）、亚马尔（Lamine Yamal）
+   - 中文媒体已有稳定译名的用译名；生僻名字首次出现可“译名（原名）”，之后统一用译名
+   - 教练同理：安切洛蒂、瓜迪奥拉、阿尔特塔、穆里尼奥、克洛普
 
-4. 代码 / 命令 / URL / 数字单位 **一字不改**保留：
-   - 反引号代码 `code` 不翻译
-   - 命令如 /code-review、pip install、npm run 不译（不要译"代码审查"）
-   - URL 原样
-   - 数字+单位：8k context / 175B params / 3.5x speedup / $3 per M tokens / 99.9%
-   - 金额、参数量、比例、区间必须保留原文的阿拉伯数字和单位；不要把 $10B-$100B 改写成“数百亿至数千亿美元”等中文数量词
+4. 俱乐部用通行中文名：
+   - 皇马/皇家马德里、巴萨/巴塞罗那、马竞、曼城、阿森纳、利物浦、曼联、切尔西、热刺、纽卡（纽卡斯尔）
+   - 拜仁（拜仁慕尼黑）、多特（多特蒙德）、勒沃库森、国米（国际米兰）、AC米兰、尤文（尤文图斯）、那不勒斯、巴黎（巴黎圣日耳曼/PSG）
+   - 别称可作补充语境（红魔、红军、蓝军、银河战舰、老妇人），但标题主体用正式名
+
+5. 以下术语**保留英文原文或通行缩写**，不翻译：
+   - VAR / FFP / PSR / UEFA / FIFA / CAF / CONMEBOL / AFC
+   - here we go（罗马诺式转会确认用语，可保留并补一句中文说明）
+   - Ballon d'Or 用通行名“金球奖”
+   - XI（首发十一人）、TIFO、 derby day 语境中的英文术语按通行习惯处理
+
+6. 数字与单位 **一字不改**保留：
+   - 比分：3-1、点球 5-4，保留连字符格式，不写成“3比1”之外的格式（中文语序可写“3-1 击败”）
+   - 转会费与薪资：1.2 亿欧、8000 万镑、周薪 40 万镑——保留原文数字和货币单位（欧/镑/美元），不要把“1.2亿欧”改写成“约一亿两千万欧元”
+   - 合同年限：5 年合同、续约至 2031
+   - 统计数据：出场 42 次 28 球 12 助攻、胜率 78%、积分 89 分
+   - 年龄、日期、时间保留原文数字

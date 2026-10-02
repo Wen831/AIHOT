@@ -72,10 +72,13 @@ export const SCHEDULES: Scheduled[] = [
   ...(FEATURES.leaderboard
     ? [{ name: "leaderboard.round", cron: "5 2,8,14,20 * * *", missed: "once" as const, run: () => (collecting ? refreshLeaderboard() : runLeaderboardRound()) }]
     : []),
+  // Collection cadence: upstream default scans every minute so per-source intervals drive the
+  // pace. Set COLLECT_SCHEDULE_CRON (e.g. "0 5 * * *" for one batch sweep a day) and
+  // SOURCE_ADAPT_INTERVALS=false to keep intervals stable instead of tightening toward 15 min.
   ...(collecting
     ? [
-        { name: "sources.schedule", cron: "* * * * *", run: () => scheduleDueSources() },
-        { name: "sources.adapt-intervals", cron: "20 4 * * *", run: adaptIntervals },
+        { name: "sources.schedule", cron: process.env.COLLECT_SCHEDULE_CRON ?? "* * * * *", run: () => scheduleDueSources() },
+        ...(process.env.SOURCE_ADAPT_INTERVALS === "false" ? [] : [{ name: "sources.adapt-intervals", cron: "20 4 * * *", run: adaptIntervals }]),
         // WeChat official accounts (paid), each once per its interval.
         { name: "sources.mp-reconcile", cron: "*/15 * * * *", run: () => scheduleMpReconcile() },
       ]

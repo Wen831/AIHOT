@@ -135,6 +135,14 @@ export async function collectSource(sourceId: string, opts: { force?: boolean } 
       const cutoff = Date.now() - backfillMonths * 30 * 86400000;
       candidates = candidates.filter((c) => !c.publishedAt || !Number.isFinite(c.publishedAt.getTime()) || c.publishedAt.getTime() >= cutoff).slice(0, backfillLimit);
     }
+    // maxAgeDays guards every run, not only the first: a listing that carries a whole month of
+    // archive (zhibo8's channel pages) must not import that backlog on a later, non-first fetch
+    // (a manual fetch racing the cron leaves firstImport already consumed).
+    const maxAgeDays = Number(source.config._aihot?.maxAgeDays ?? 0);
+    if (maxAgeDays > 0) {
+      const cutoff = Date.now() - maxAgeDays * 86400000;
+      candidates = candidates.filter((c) => !c.publishedAt || !Number.isFinite(c.publishedAt.getTime()) || c.publishedAt.getTime() >= cutoff);
+    }
     // Process all candidates already returned before advancing the success cursor.
 
     // Detail pages only for material we have not seen (bounded per run), and only for what the listing lacks.
