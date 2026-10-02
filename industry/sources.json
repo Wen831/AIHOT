@@ -1,5 +1,5 @@
 {
-  "$comment": "示范信源：首次启动时导入（scripts/seed.ts），已存在的不会被覆盖。之后在后台“信源”里增删改。字段说明见 docs/customize.md。足球起步配置：直播吧足球频道 + 懂球帝首页，均为 web_list 直抓（两站列表与详情页都是 SSR，2026-10-02 实测验证）；interval 1380 分钟配合 COLLECT_SCHEDULE_CRON=0 5 * * * 实现每天 5 点批量采集。",
+  "$comment": "信源配置：首次启动时导入（scripts/seed.ts，可重跑，只补不覆盖），之后在后台“信源”里增删改。字段说明见 docs/customize.md。足球：直播吧足球频道 + 懂球帝首页（web_list 直抓，SSR 2026-10-02 实测）；国内新闻：澎湃（首页热点走官方 JSON API，json_list）、网易新闻（首页列表 web_list，日期由详情页 article:published_time 自动补）、联合早报（首页 web_list，日期由详情页 JSON-LD datePublished 自动补；频道页为客户端渲染不可用，故用首页+URL 前缀过滤）。interval 1380 分钟配合 COLLECT_SCHEDULE_CRON=0 5 * * * 每日 5 点批量采集；_aihot.initialBackfillLimit 限制首采存量，防旧文批量分析耗积分。",
   "sources": [
     {
       "id": "web-zhibo8-zuqiu",
@@ -45,6 +45,80 @@
       "participation_mode": "editorial",
       "interval_minutes": 1380,
       "tags": ["足球媒体"],
+      "site_fulltext": false,
+      "syndicate_fulltext": false
+    },
+    {
+      "id": "json-thepaper-hot",
+      "name": "澎湃新闻",
+      "kind": "json_list",
+      "config": {
+        "url": "https://api.thepaper.cn/contentapi/wwwIndex/rightSidebar",
+        "mode": "json_api",
+        "itemsPath": "data.hotNews",
+        "titlePaths": ["name"],
+        "urlTemplate": "https://www.thepaper.cn/newsDetail_forward_{raw:contId}",
+        "publishedAtPath": "pubTimeLong",
+        "publishedAtUnit": "epoch_ms",
+        "authorPaths": ["trackAuthor"],
+        "externalIdPath": "contId",
+        "_aihot": {
+          "initialBackfillLimit": 15,
+          "maxAgeDays": 2
+        }
+      },
+      "tier": "T2",
+      "first_party": false,
+      "participation_mode": "editorial",
+      "interval_minutes": 1380,
+      "tags": ["国内媒体"],
+      "site_fulltext": false,
+      "syndicate_fulltext": false
+    },
+    {
+      "id": "web-163-news",
+      "name": "网易新闻",
+      "kind": "web_list",
+      "config": {
+        "url": "https://news.163.com/",
+        "parseMode": "html",
+        "itemSelector": "li:has(> a[href*='/news/article/'])",
+        "titleSelector": "a",
+        "allowUrlPrefixes": ["https://www.163.com/news/article/"],
+        "detail": { "maxFetches": 20 },
+        "_aihot": {
+          "initialBackfillLimit": 15,
+          "maxAgeDays": 2
+        }
+      },
+      "tier": "T2",
+      "first_party": false,
+      "participation_mode": "editorial",
+      "interval_minutes": 1380,
+      "tags": ["国内媒体"],
+      "site_fulltext": false,
+      "syndicate_fulltext": false
+    },
+    {
+      "id": "web-zaobao-home",
+      "name": "联合早报",
+      "kind": "web_list",
+      "config": {
+        "url": "https://www.zaobao.com/",
+        "parseMode": "html",
+        "itemSelector": "a.article-link",
+        "allowUrlPrefixes": ["https://www.zaobao.com/news/", "https://www.zaobao.com/realtime/"],
+        "detail": { "maxFetches": 20 },
+        "_aihot": {
+          "initialBackfillLimit": 15,
+          "maxAgeDays": 2
+        }
+      },
+      "tier": "T2",
+      "first_party": false,
+      "participation_mode": "editorial",
+      "interval_minutes": 1380,
+      "tags": ["外媒中文"],
       "site_fulltext": false,
       "syndicate_fulltext": false
     }

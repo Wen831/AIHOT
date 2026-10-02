@@ -4,18 +4,18 @@
 
 export const SITE = {
   /** 站名：导航、页面标题、分享图、RSS、MCP、后台都用它。 */
-  name: "绿茵早报",
+  name: "每日早报",
   /**
    * 行业词：拼进默认说法里，比如“AI 日报”“AI 动态”。
    * 改成“法律”“HR”“黄金”之类，页面上就会变成“法律日报”“法律动态”。
    */
-  subject: "足球",
+  subject: "资讯",
   /** 首页的完整标题（浏览器标签、搜索结果）。 */
-  homeTitle: "绿茵早报 — 足球动态 · 每日精选与日报",
+  homeTitle: "每日早报 — 足球与国内资讯 · 每日精选与日报",
   /** 一句话介绍：搜索引擎、分享卡片、RSS、llms.txt 会用。 */
-  description: "每天定时收集足球新闻，用模型摘要、打分、精选，把同一件事的多篇报道归到一起，早上出一份足球日报。",
+  description: "每天定时收集足球与国内新闻（时政、社会、财经、科技），用模型摘要、打分、精选，把同一件事的多篇报道归到一起，早上出一份日报。",
   /** 首页左上角和侧边栏下面的一行小字。 */
-  tagline: "值得知道的足球动态",
+  tagline: "值得知道的足球与国内动态",
   /** 界面语言（HTML lang、og:locale）。 */
   locale: "zh-CN",
   /** 默认域名，只在没设置 SITE_URL 时使用。 */
@@ -33,26 +33,26 @@ export const SITE = {
   icp: null as string | null,
   /** 结构化数据里的网站运营者（搜索引擎用）。 */
   organization: {
-    name: "绿茵早报",
+    name: "每日早报",
     /** 创始人（选填）：{ name, url, description }。 */
     founder: null as null | { name: string; url?: string; description?: string },
   },
   /** 抓取信源时报上的名字（User-Agent 里用），不要冒用别的站。 */
-  crawlerName: "GreenPitchBot",
+  crawlerName: "DailyBriefBot",
 } as const;
 
 /** 关于页的文案。数字（信源数、收录数、精选数、日报期数）来自站内实时统计，不用写在这里。 */
 export const ABOUT = {
   kicker: `关于 ${SITE.name}`,
   /** 大标题：第一行正常颜色，第二行强调色。 */
-  headline: ["足球世界每天都有新动静，", "值得看的，只有几条。"] as [string, string],
+  headline: ["足球与这个世界每天都有新动静，", "值得看的，只有几条。"] as [string, string],
   /** 标题下面的一段话。{sources} 会换成实时的信源数。 */
-  lead: `${SITE.name} 每天定时收集 {sources} 个信源的足球新闻：抓取、归并、打分、精选，早上出一份日报。`,
+  lead: `${SITE.name} 每天定时收集 {sources} 个信源的足球与国内新闻：抓取、归并、打分、精选，早上出一份日报。`,
   /** 信源河动画下面的四个环节。 */
   steps: {
-    collect: "主流足球媒体的资讯都在看：转会、赛果、国家队、判罚与产业动态，每天固定收集一轮。",
+    collect: "足球媒体与主流新闻源都在看：足球动态与国内时政、社会、财经、科技，每天固定收集一轮。",
     store: "抓到的都存下来，同一件事的多篇报道归到一起，不会重复出现在日报里。",
-    select: "模型先看是不是足球资讯、有没有实际信息，再写中文标题和摘要；花边八卦和灌水盘点进不来。",
+    select: "模型先看是不是值得收录的资讯、有没有实际信息，再写中文标题和摘要；花边八卦和灌水盘点进不来。",
     publish: "每天早上出日报，周一出周报，每月 1 日出月报。",
   },
   /**

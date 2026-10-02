@@ -14,30 +14,36 @@ export const CATEGORIES = [
   { key: "national", label: "国家队", section: "俱乐部与国家队", guide: "国家队大名单、大赛征程、国字号球队动态、国际比赛日" },
   { key: "industry", label: "产业", section: "规则与产业", guide: "规则修改、判罚处罚、VAR/裁判、联赛政策、转播与商业、足球产业与治理" },
   { key: "opinion", label: "观点", section: "观点与深度", guide: "评论、分析、复盘、深度访谈、战术解读" },
+  { key: "china-politics", label: "时政", section: "国内时政", guide: "国内重大政策出台与调整、法律法规、人事任命、外交与国际关系、台海与港澳事务；涉华国际新闻（中外关系、涉华国际会议与谈判、外国对华政策）也归此类" },
+  { key: "china-society", label: "社会", section: "社会民生", guide: "社会热点事件、民生政策（教育、医疗、养老、就业）、公共安全、自然灾害与天气、舆论关注的社会现象" },
+  { key: "finance", label: "财经", section: "财经商业", guide: "宏观经济数据与政策、股市债市汇市、公司重大经营与资本动态（上市、并购、暴雷）、行业走向、房地产" },
+  { key: "tech", label: "科技", section: "科技数码", guide: "科技行业与公司动态、芯片、互联网、通信、航天、新能源车、消费数码产品发布（人工智能行业内容除外）" },
 ] as const;
 
 /**
  * 内容理解一步给每篇资料判的"内容类型"（写在 prompts/content-understanding.md 里，改了类型要同步改那份提示词）。
  * 评分提示词（prompts/selection-score.md）按类型给五个维度不同的权重。
  */
-export const ITEM_TYPES = ["transfer_deal", "match_result", "coaching_move", "injury_suspension", "governance_event", "opinion_analysis", "misc_update"] as const;
+export const ITEM_TYPES = ["transfer_deal", "match_result", "coaching_move", "injury_suspension", "governance_event", "opinion_analysis", "misc_update", "policy_news", "social_event", "business_finance", "tech_update"] as const;
 
 // ── 标签词表 ────────────────────────────────────────────────────────────────────────────
 
 /** 每篇资料的第一个标签必须是这些"分类标签"之一。 */
 export const CATEGORY_TAGS = [
-  "转会官宣", "转会传闻", "比赛赛果", "赛前动态", "伤病停赛", "教练变动", "国家队", "规则/判罚", "财政/收购", "足球产业", "深度/观点", "其他",
+  "转会官宣", "转会传闻", "比赛赛果", "赛前动态", "伤病停赛", "教练变动", "国家队", "规则/判罚", "财政/收购", "足球产业", "深度/观点", "时政要闻", "社会热点", "财经商业", "科技数码", "其他",
 ] as const;
 
 /** 可选的主题标签。 */
 export const TOPIC_TAGS = [
   "英超", "西甲", "意甲", "德甲", "法甲", "中超", "欧冠", "欧联", "世界杯", "欧洲杯", "亚洲杯", "亚冠", "世俱杯", "欧国联", "足总杯", "国王杯", "金球奖", "女足", "青训",
+  "中美关系", "台海", "房地产", "芯片", "新能源", "航天",
 ] as const;
 
-/** 可选的实体标签（俱乐部、国家队、机构）。 */
+/** 可选的实体标签（俱乐部、国家队、机构、公司）。 */
 export const ENTITY_TAGS = [
   "皇马", "巴塞罗那", "马德里竞技", "曼城", "阿森纳", "利物浦", "曼联", "切尔西", "热刺", "纽卡斯尔", "拜仁", "多特蒙德", "勒沃库森",
   "国际米兰", "AC米兰", "尤文图斯", "那不勒斯", "巴黎圣日耳曼", "国足", "日本队", "韩国队", "FIFA", "欧足联", "中国足协",
+  "华为", "腾讯", "阿里巴巴", "字节跳动", "比亚迪", "宁德时代", "央行", "财政部",
 ] as const;
 
 /** 模型常写的近义词，统一成词表里的写法。 */
@@ -53,6 +59,10 @@ export const TAG_SYNONYMS: Readonly<Record<string, string>> = {
   "收购": "财政/收购", "易主": "财政/收购", "FFP": "财政/收购", "财政": "财政/收购", "财政公平": "财政/收购", "注资": "财政/收购",
   "商业": "足球产业", "转播": "足球产业", "赞助": "足球产业", "治理": "足球产业",
   "评论": "深度/观点", "分析": "深度/观点", "战术": "深度/观点", "复盘": "深度/观点", "访谈": "深度/观点", "专栏": "深度/观点",
+  "政策": "时政要闻", "时政": "时政要闻", "人事": "时政要闻", "外交": "时政要闻", "官宣人事": "时政要闻",
+  "社会": "社会热点", "民生": "社会热点", "热点事件": "社会热点", "公共安全": "社会热点",
+  "财经": "财经商业", "经济": "财经商业", "金融": "财经商业", "股市": "财经商业", "公司": "财经商业", "宏观数据": "财经商业",
+  "科技": "科技数码", "数码": "科技数码", "互联网": "科技数码", "新能源车": "科技数码",
   "英超联赛": "英超", "西甲联赛": "西甲", "意甲联赛": "意甲", "德甲联赛": "德甲", "法甲联赛": "法甲",
   "欧洲冠军联赛": "欧冠", "欧联杯": "欧联", "金球": "金球奖",
 };
@@ -61,6 +71,7 @@ export const TAG_SYNONYMS: Readonly<Record<string, string>> = {
 export const CATEGORY_BY_ITEM_TYPE: Readonly<Record<string, string>> = {
   transfer_deal: "转会官宣", match_result: "比赛赛果", coaching_move: "教练变动", injury_suspension: "伤病停赛",
   governance_event: "规则/判罚", opinion_analysis: "深度/观点", misc_update: "其他",
+  policy_news: "时政要闻", social_event: "社会热点", business_finance: "财经商业", tech_update: "科技数码",
 };
 
 // ── 俱乐部与主体 ─────────────────────────────────────────────────────────────────────────
