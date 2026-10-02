@@ -3,7 +3,11 @@
 name: aihot
 
 x-app: &app
-  build: .
+  build:
+    context: .
+    args:
+      # Set NPM_KEEP_DEV=true in .env to keep devDependencies (tests inside the image).
+      NPM_KEEP_DEV: ${NPM_KEEP_DEV:-false}
   image: aihot-app
   env_file: .env
   restart: unless-stopped

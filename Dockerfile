@@ -9,6 +9,8 @@ RUN apt-get update \
 
 FROM base AS build
 ARG NPM_REGISTRY=
+# NPM_KEEP_DEV=true keeps devDependencies in the image so the test suite can run inside it.
+ARG NPM_KEEP_DEV=false
 COPY package.json package-lock.json ./
 COPY apps/api/package.json apps/api/
 COPY apps/web/package.json apps/web/
@@ -18,7 +20,7 @@ COPY packages/contracts/package.json packages/contracts/
 COPY industry/package.json industry/
 RUN npm ci --no-audit --no-fund ${NPM_REGISTRY:+--registry=$NPM_REGISTRY}
 COPY . .
-RUN npm run build -w @aihot/web && npm prune --omit=dev --no-audit --no-fund
+RUN npm run build -w @aihot/web && if [ "$NPM_KEEP_DEV" != "true" ]; then npm prune --omit=dev --no-audit --no-fund; fi
 
 FROM base
 ENV NODE_ENV=production
