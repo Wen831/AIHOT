@@ -77,7 +77,9 @@ export const SCHEDULES: Scheduled[] = [
   // SOURCE_ADAPT_INTERVALS=false to keep intervals stable instead of tightening toward 15 min.
   ...(collecting
     ? [
-        { name: "sources.schedule", cron: process.env.COLLECT_SCHEDULE_CRON ?? "* * * * *", run: () => scheduleDueSources() },
+        // missed: once — a desktop that slept through the slot gets one catch-up sweep on wake,
+        // instead of skipping the day entirely (the default skip suits an always-on server).
+        { name: "sources.schedule", cron: process.env.COLLECT_SCHEDULE_CRON ?? "* * * * *", missed: "once" as const, run: () => scheduleDueSources() },
         ...(process.env.SOURCE_ADAPT_INTERVALS === "false" ? [] : [{ name: "sources.adapt-intervals", cron: "20 4 * * *", run: adaptIntervals }]),
         // WeChat official accounts (paid), each once per its interval.
         { name: "sources.mp-reconcile", cron: "*/15 * * * *", run: () => scheduleMpReconcile() },
