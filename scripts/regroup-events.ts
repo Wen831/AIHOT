@@ -24,7 +24,8 @@ import { parseArgs } from "node:util";
 import { closeDb, sql } from "@aihot/backend/db";
 import { enqueue, getBoss, QUEUES, stopBoss } from "@aihot/backend/jobs/queue";
 import { backfillStoryHeat, computeHotRanking } from "@aihot/backend/events/hot";
-import { consolidate, warmRecallWindow } from "@aihot/backend/events/group";
+import { consolidate } from "@aihot/backend/events/consolidate";
+import { warmRecallWindow } from "@aihot/backend/events/recall";
 import { firmlyTied } from "@aihot/backend/events/relate";
 
 const { values, positionals } = parseArgs({
