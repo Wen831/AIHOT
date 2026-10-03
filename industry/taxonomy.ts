@@ -3,21 +3,20 @@
 // 换行业时：类别的 key 会出现在网址里（/all?category=…），上线后就不要再改；标签和名录可以随时增减。
 
 /**
- * 网页上的类别（筛选栏、卡片角标、RSS 分类订阅）。key 是网址和接口里的身份，上线后不要改。
+ * 网页上的类别（筛选栏、卡片角标、RSS 分类订阅）。key 是网址和接口里的身份，上线后就不要改。
  * section 是日报里的分节标题（几个类别可以共用一节，按这里的顺序排）；guide 告诉模型怎么归类。
- * 没归上类的资料在日报里放进第一个 key 为 industry 的类别所在的节（没有就放最后一节）。
+ * 没归上类的资料在日报里放进最后一节。国内四类排在前、足球四类排在后，页面与日报共用这个顺序。
  */
 export const CATEGORIES = [
-  { key: "transfer", label: "转会", section: "转会窗", guide: "转会官宣、达成协议、租借、续约、解约，以及有实质进展的转会传闻" },
-  { key: "match", label: "赛果", section: "比赛与赛果", guide: "已结束比赛的比分、关键战报、大冷门、破纪录表现" },
-  { key: "club", label: "俱乐部", section: "俱乐部与国家队", guide: "俱乐部经营、人事、财政、收购、队内动态、赛前发布会与备战" },
-  { key: "national", label: "国家队", section: "俱乐部与国家队", guide: "国家队大名单、大赛征程、国字号球队动态、国际比赛日" },
-  { key: "industry", label: "产业", section: "规则与产业", guide: "规则修改、判罚处罚、VAR/裁判、联赛政策、转播与商业、足球产业与治理" },
-  { key: "opinion", label: "观点", section: "观点与深度", guide: "评论、分析、复盘、深度访谈、战术解读" },
   { key: "china-politics", label: "时政", section: "国内时政", guide: "国内重大政策出台与调整、法律法规、人事任命、外交与国际关系、台海与港澳事务；涉华国际新闻（中外关系、涉华国际会议与谈判、外国对华政策）也归此类" },
   { key: "china-society", label: "社会", section: "社会民生", guide: "社会热点事件、民生政策（教育、医疗、养老、就业）、公共安全、自然灾害与天气、舆论关注的社会现象" },
-  { key: "finance", label: "财经", section: "财经商业", guide: "宏观经济数据与政策、股市债市汇市、公司重大经营与资本动态（上市、并购、暴雷）、行业走向、房地产" },
+  { key: "finance", label: "财经", section: "财经商业", guide: "宏观经济数据与政策、股市债市汇市、公司重大经营与资本动态（上市、并购、暴雷）、行业走向、房地产；国际宏观经济与市场大事也归此类" },
   { key: "tech", label: "科技", section: "科技数码", guide: "科技行业与公司动态、芯片、互联网、通信、航天、新能源车、消费数码产品发布（人工智能行业内容除外）" },
+  { key: "international", label: "国际", section: "国际视野", guide: "不直接涉及中国的国际新闻：外国政局与大选、战争与军事冲突、大国博弈与地缘政治、重大国际事件与国际组织动态、外国重大社会事件" },
+  { key: "match", label: "比赛", section: "比赛与赛果", guide: "已结束比赛的比分、关键战报、大冷门、破纪录表现；比赛复盘与战术解读、规则修改、判罚处罚、VAR/裁判争议、联赛政策也归此类" },
+  { key: "club", label: "俱乐部", section: "俱乐部与国家队", guide: "俱乐部经营、人事、财政、收购、队内动态、赛前发布会与备战；围绕俱乐部的深度访谈与经营分析、足球产业与治理、转播与商业动态归此类" },
+  { key: "national", label: "国家队", section: "俱乐部与国家队", guide: "国家队大名单、大赛征程、国字号球队动态、国际比赛日" },
+  { key: "transfer", label: "转会", section: "转会窗", guide: "转会官宣、达成协议、租借、续约、解约，以及有实质进展的转会传闻" },
 ] as const;
 
 /**
@@ -149,3 +148,6 @@ export const IDENTITY_CONTEXT_ALIASES: ReadonlyArray<{ entityId: string; pattern
   { entityId: "liverpool", pattern: /\bThe\s+Kop\b/i },
   { entityId: "bayern", pattern: /\bDie\s+Roten\b|\bFC\s+Bayern\b/i },
 ];
+
+/** 分类分区：足球类（其余为国内新闻类）；网站筛选栏与卡片角标据此做视觉分组。 */
+export const FOOTBALL_CATEGORIES: ReadonlySet<string> = new Set(["match", "club", "national", "transfer"]);

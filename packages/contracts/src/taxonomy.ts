@@ -1,9 +1,12 @@
 // Public vocabularies shared by the website, the API and the worker. The categories themselves belong to
 // the industry pack (industry/taxonomy.ts); their keys are external identities (URLs, API, RSS).
-import { CATEGORIES } from "@aihot/industry/taxonomy";
+import { CATEGORIES, FOOTBALL_CATEGORIES } from "@aihot/industry/taxonomy";
 
 export type CategoryKey = (typeof CATEGORIES)[number]["key"];
 export const CATEGORY_KEYS = CATEGORIES.map((c) => c.key) as unknown as readonly [CategoryKey, ...CategoryKey[]];
+
+/** The football half of the categories (the rest are domestic news); the site marks these visually. */
+export const isFootballCategory = (key: string | null | undefined): boolean => !!key && FOOTBALL_CATEGORIES.has(key);
 
 /** Website tab labels. */
 export const CATEGORY_LABELS = Object.fromEntries(CATEGORIES.map((c) => [c.key, c.label])) as Record<CategoryKey, string>;
