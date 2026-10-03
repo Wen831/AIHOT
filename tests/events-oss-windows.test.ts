@@ -141,7 +141,7 @@ test("both windows exclude their lower endpoint and include their upper endpoint
   assert.equal(result.trendPct, expectedPct([6, 0], [48 - 1 / hour, 42, 0]));
 });
 
-test("repeat articles and sources use one independent latest timestamp per window", async () => {
+test("every report adds heat on its own timestamp; participants stay independent", async () => {
   const { storyId, sources } = await fixture([
     { participant: "shared", source: "expired-a", hours: 51, kind: "editorial" },
     { participant: "shared", source: "expired-b", hours: 50, kind: "editorial" },
@@ -151,8 +151,8 @@ test("repeat articles and sources use one independent latest timestamp per windo
   ]);
   const result = (await entry(storyId))!;
   assert.equal(result.participantCount, 2);
-  assert.equal(result.heat, expectedHeat([1, 10]));
-  assert.equal(result.trendPct, expectedPct([1, 10], [44, 4]));
+  assert.equal(result.heat, expectedHeat([2, 1, 10]));
+  assert.equal(result.trendPct, expectedPct([2, 1, 10], [45, 44, 4]));
   assert.equal(result.sourceCount, 1, "expired editorial evidence cannot reclassify a current signal");
   assert.equal(result.signalCount, 1);
   assert.deepEqual(result.sourceNames, [sources.get("reporter")]);
@@ -208,7 +208,7 @@ test("prior-only behind sources are excluded from comparison without making curr
   assert.deepEqual(await snapshot(storyId), { heat: expectedHeat([10, 1]), participants: 2, cohort: 1, complete: true });
 });
 
-test("a behind source in either window removes its participant from both comparison heats", async () => {
+test("a behind source in either window removes that report from both comparison heats", async () => {
   const { storyId } = await fixture([
     { participant: "prior-only", hours: 50, behind: true },
     { participant: "shared", source: "old-behind", hours: 50, behind: true },
@@ -219,9 +219,9 @@ test("a behind source in either window removes its participant from both compari
   const result = (await entry(storyId))!;
   assert.equal(result.heat, expectedHeat([1, 2, 10]));
   assert.equal(result.participantCount, 3);
-  assert.equal(result.trend, "down");
-  assert.equal(result.trendPct, expectedPct([10], [4]));
-  assert.deepEqual(result.badges, []);
+  assert.equal(result.trend, "up");
+  assert.equal(result.trendPct, expectedPct([1, 10], [4]));
+  assert.deepEqual(result.badges, ["rising"]);
   await snapshotHeat(at);
   assert.equal((await snapshot(storyId))!.complete, false);
 });
@@ -233,8 +233,8 @@ test("an expired behind source of a current participant affects comparison but n
     { participant: "reporter", hours: 10, kind: "editorial" },
   ]);
   const result = (await entry(storyId))!;
-  assert.equal(result.trend, "down");
-  assert.equal(result.trendPct, expectedPct([10], [4]));
+  assert.equal(result.trend, "up");
+  assert.equal(result.trendPct, expectedPct([1, 10], [4]));
   await snapshotHeat(at);
   assert.deepEqual(await snapshot(storyId), { heat: expectedHeat([1, 10]), participants: 2, cohort: 1, complete: true });
 });
