@@ -38,7 +38,7 @@ interface Result {
   meta: { split: string; promptVersion: string };
   model: string;
   reportPath: string;
-  summary: { decisive: number; errors: number; accuracy: number; tokensIn: number; tokensOut: number };
+  summary: { decisive: number; errors: number; accuracy: number; tokensIn: number; tokensOut: number; wallSeconds: number; avgLatencyMs: number };
   cases: Array<{ caseId: string; decision: string | null; error: string | null }>;
 }
 
@@ -77,6 +77,13 @@ async function evaluate(rows: GoldRow[], providers: { prefilter: string; score: 
     rmSync(dir, { recursive: true, force: true });
   }
 }
+
+// wallSeconds and avgLatencyMs measure machine speed, not evaluation semantics: a cold first
+// child process rounds up on a slow host and would flake the cold/warm equality.
+const metricsOf = (summary: Result["summary"]) => {
+  const { wallSeconds: _wall, avgLatencyMs: _latency, ...metrics } = summary;
+  return metrics;
+};
 
 async function withoutModelOverrides<T>(run: () => Promise<T>): Promise<T> {
   const saved = await sql<{ key: string; value: unknown; updated_by: string | null; updated_at: Date }[]>`
@@ -119,7 +126,7 @@ test("default evaluation follows the production score route and shares duplicate
     const warm = await evaluate(rows, { prefilter: prefilter.url, score: score.url });
 
     assert.equal(cold.model, "glm-5.3-flash-selection", "no --models follows SCORE_MODEL / production routing");
-    assert.deepEqual(cold.summary, warm.summary, "cold and cached evaluations keep the same coverage and metrics");
+    assert.deepEqual(metricsOf(cold.summary), metricsOf(warm.summary), "cold and cached evaluations keep the same coverage and metrics");
     assert.deepEqual(cold.cases.map((item) => item.decision), ["select", "reject"], "the shared score still uses each tier's threshold");
     assert.deepEqual([cold.summary.decisive, cold.summary.errors, cold.summary.accuracy], [2, 0, 1]);
     assert.deepEqual([prefilter.hits(), score.hits()], [2, 2], "two per-case prefilters, two shared score calls across both runs");
