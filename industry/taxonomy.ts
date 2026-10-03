@@ -4,8 +4,10 @@
 
 /**
  * 网页上的类别（筛选栏、卡片角标、RSS 分类订阅）。key 是网址和接口里的身份，上线后就不要改。
- * section 是日报里的分节标题（几个类别可以共用一节，按这里的顺序排）；guide 告诉模型怎么归类。
- * 没归上类的资料在日报里放进最后一节。国内四类排在前、足球四类排在后，页面与日报共用这个顺序。
+ * section 是日报里的分节标题（几个类别可以共用一节，按这里的顺序排）；guide 告诉结构抽取模型这一类收什么、
+ * 和相邻类别的边界在哪（总的归类原则写在 prompts/structure.md 里）。
+ * commentary 标出评论类（教程、观点）：日报写过的事又有评论类的后续报道，只占一行快讯（报道它的信源够多时除外）。
+ * 没归上类的资料在日报里放进第一个 key 为 industry 的类别所在的节（没有就放最后一节）。国内五类排在前、足球四类排在后，页面与日报共用这个顺序。
  */
 export const CATEGORIES = [
   { key: "china-politics", label: "时政", section: "国内时政", guide: "国内重大政策出台与调整、法律法规、人事任命、外交与国际关系、台海与港澳事务；涉华国际新闻（中外关系、涉华国际会议与谈判、外国对华政策）也归此类" },
@@ -17,7 +19,17 @@ export const CATEGORIES = [
   { key: "club", label: "俱乐部", section: "俱乐部与国家队", guide: "俱乐部经营、人事、财政、收购、队内动态、赛前发布会与备战；围绕俱乐部的深度访谈与经营分析、足球产业与治理、转播与商业动态归此类" },
   { key: "national", label: "国家队", section: "俱乐部与国家队", guide: "国家队大名单、大赛征程、国字号球队动态、国际比赛日" },
   { key: "transfer", label: "转会", section: "转会窗", guide: "转会官宣、达成协议、租借、续约、解约，以及有实质进展的转会传闻" },
-] as const;
+] as const satisfies ReadonlyArray<{ key: string; label: string; section: string; guide: string; commentary?: true }>;
+
+/**
+ * 这个行业最受关注的一类发布（AI 行业是新模型）：日报报头的“N 个新模型”、改分类后修订已出的报告、
+ * 公司编年史的上面一行都按它数。category 是类别，tag 是标签，两者都对上才算；unit 接在数字后面。
+ * 没有这样一类的行业设成 null，报头就不显示这个数。
+ */
+export const RELEASE: { category: string; tag: string; unit: string } | null = null;
+
+/** 周报月报的总述可以直接写、不必在报道里找到出处的行业通用词（小写，只对拉丁字母缩写生效）。站名会自动算进去。 */
+export const PLAIN_TERMS: readonly string[] = ["gdp", "cpi", "ai", "var", "ffp", "uefa", "fifa"];
 
 /**
  * 内容理解一步给每篇资料判的"内容类型"（写在 prompts/content-understanding.md 里，改了类型要同步改那份提示词）。
@@ -75,8 +87,12 @@ export const CATEGORY_BY_ITEM_TYPE: Readonly<Record<string, string>> = {
 
 // ── 俱乐部与主体 ─────────────────────────────────────────────────────────────────────────
 
-/** 主体名录：id → 显示名、卡片上显示的标签（null 表示只用 entity:<id> 归类）、别名。 */
-export const ENTITIES: Record<string, { name: string; displayTag: string | null; aliases: string[] }> = {
+/**
+ * 主体名录：id → 显示名、卡片上显示的标签（null 表示只用 entity:<id> 归类）、别名。
+ * aliases 给结构抽取模型看；otherNames 是主体自己的其他称呼（官方账号名、子品牌），
+ * 把事实的主体对到发布方时也认它们。
+ */
+export const ENTITIES: Record<string, { name: string; displayTag: string | null; aliases: string[]; otherNames?: string[] }> = {
   "real-madrid": { name: "皇家马德里", displayTag: "皇马", aliases: ["皇马", "皇家马德里", "Real Madrid"] },
   barcelona: { name: "巴塞罗那", displayTag: "巴塞罗那", aliases: ["巴萨", "巴塞罗那", "FC Barcelona"] },
   "atletico-madrid": { name: "马德里竞技", displayTag: "马德里竞技", aliases: ["马竞", "马德里竞技", "Atletico"] },
