@@ -41,6 +41,12 @@ export function renderTemplate(template: string, item: unknown): string | null {
 
 function toDate(v: unknown, unit: string | undefined): Date | null {
   if (v === null || v === undefined || v === "") return null;
+  if (unit === "utc8") {
+    // A wall-clock time without a zone (cctv "2026-10-03 15:52:02") is Beijing time.
+    const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?$/.exec(String(v).trim());
+    const d = m ? new Date(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6] ?? "00"}+08:00`) : null;
+    return d && Number.isFinite(d.getTime()) ? d : null;
+  }
   if (unit === "epoch_ms" || unit === "epoch_s") {
     try {
       const date = new Date(Number(v) * (unit === "epoch_s" ? 1000 : 1));
@@ -156,7 +162,14 @@ export async function fetchJsonList(source: SourceRow): Promise<Candidate[]> {
     try {
       data = JSON.parse(res.text());
     } catch {
-      throw new FetchError("response is not JSON");
+      // A JSONP body wraps the payload in a callback: name({...}); — unwrap and parse the object.
+      const jsonp = /^\s*[\w$.]+\s*\(([\s\S]*)\)\s*;?\s*$/.exec(res.text());
+      if (!jsonp) throw new FetchError("response is not JSON");
+      try {
+        data = JSON.parse(jsonp[1]!);
+      } catch {
+        throw new FetchError("response is not JSON");
+      }
     }
   }
   let items = c.itemsPath ? getPath(data, c.itemsPath) : c.jsonKey ? getPath(data, c.jsonKey) : data;

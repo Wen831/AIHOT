@@ -11,7 +11,9 @@
         "itemSelector": "li",
         "titleSelector": "a",
         "publishedAtRegex": "zhibo8\\.com/zuqiu/(\\d{4}-\\d{2}-\\d{2})/",
-        "allowUrlPrefixes": ["https://news.zhibo8.com/zuqiu/"],
+        "allowUrlPrefixes": [
+          "https://news.zhibo8.com/zuqiu/"
+        ],
         "_aihot": {
           "initialBackfillLimit": 10,
           "maxAgeDays": 3
@@ -21,7 +23,9 @@
       "first_party": false,
       "participation_mode": "editorial",
       "interval_minutes": 1380,
-      "tags": ["足球媒体"],
+      "tags": [
+        "足球媒体"
+      ],
       "site_fulltext": false,
       "syndicate_fulltext": false
     },
@@ -34,7 +38,9 @@
         "parseMode": "html",
         "itemSelector": "a.news-card",
         "titleSelector": ".news-card__title",
-        "allowUrlPrefixes": ["https://www.dongqiudi.com/articles/"],
+        "allowUrlPrefixes": [
+          "https://www.dongqiudi.com/articles/"
+        ],
         "_aihot": {
           "initialBackfillLimit": 10,
           "maxAgeDays": 3
@@ -44,7 +50,9 @@
       "first_party": false,
       "participation_mode": "editorial",
       "interval_minutes": 1380,
-      "tags": ["足球媒体"],
+      "tags": [
+        "足球媒体"
+      ],
       "site_fulltext": false,
       "syndicate_fulltext": false
     },
@@ -56,11 +64,15 @@
         "url": "https://api.thepaper.cn/contentapi/wwwIndex/rightSidebar",
         "mode": "json_api",
         "itemsPath": "data.hotNews",
-        "titlePaths": ["name"],
+        "titlePaths": [
+          "name"
+        ],
         "urlTemplate": "https://www.thepaper.cn/newsDetail_forward_{raw:contId}",
         "publishedAtPath": "pubTimeLong",
         "publishedAtUnit": "epoch_ms",
-        "authorPaths": ["trackAuthor"],
+        "authorPaths": [
+          "trackAuthor"
+        ],
         "externalIdPath": "contId",
         "_aihot": {
           "initialBackfillLimit": 15,
@@ -71,7 +83,9 @@
       "first_party": false,
       "participation_mode": "editorial",
       "interval_minutes": 1380,
-      "tags": ["国内媒体"],
+      "tags": [
+        "国内媒体"
+      ],
       "site_fulltext": false,
       "syndicate_fulltext": false
     },
@@ -84,8 +98,12 @@
         "parseMode": "html",
         "itemSelector": "li:has(> a[href*='/news/article/'])",
         "titleSelector": "a",
-        "allowUrlPrefixes": ["https://www.163.com/news/article/"],
-        "detail": { "maxFetches": 20 },
+        "allowUrlPrefixes": [
+          "https://www.163.com/news/article/"
+        ],
+        "detail": {
+          "maxFetches": 20
+        },
         "_aihot": {
           "initialBackfillLimit": 15,
           "maxAgeDays": 2
@@ -95,7 +113,9 @@
       "first_party": false,
       "participation_mode": "editorial",
       "interval_minutes": 1380,
-      "tags": ["国内媒体"],
+      "tags": [
+        "国内媒体"
+      ],
       "site_fulltext": false,
       "syndicate_fulltext": false
     },
@@ -107,8 +127,13 @@
         "url": "https://www.zaobao.com/",
         "parseMode": "html",
         "itemSelector": "a.article-link",
-        "allowUrlPrefixes": ["https://www.zaobao.com/news/", "https://www.zaobao.com/realtime/"],
-        "detail": { "maxFetches": 20 },
+        "allowUrlPrefixes": [
+          "https://www.zaobao.com/news/",
+          "https://www.zaobao.com/realtime/"
+        ],
+        "detail": {
+          "maxFetches": 20
+        },
         "_aihot": {
           "initialBackfillLimit": 15,
           "maxAgeDays": 2
@@ -118,7 +143,99 @@
       "first_party": false,
       "participation_mode": "editorial",
       "interval_minutes": 1380,
-      "tags": ["外媒中文"],
+      "tags": [
+        "外媒中文"
+      ],
+      "site_fulltext": false,
+      "syndicate_fulltext": false
+    },
+    {
+      "id": "web-guancha-home",
+      "name": "观察者网",
+      "kind": "web_list",
+      "config": {
+        "url": "https://www.guancha.cn/",
+        "parseMode": "html",
+        "itemSelector": "a[href*='.shtml']",
+        "detail": {
+          "maxFetches": 20,
+          "publishedAtRegex": "\"pubDate\":\"(\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2})\""
+        },
+        "_aihot": {
+          "initialBackfillLimit": 15,
+          "maxAgeDays": 2
+        }
+      },
+      "tier": "T2",
+      "first_party": false,
+      "participation_mode": "editorial",
+      "interval_minutes": 1380,
+      "tags": [
+        "国内媒体"
+      ],
+      "site_fulltext": false,
+      "syndicate_fulltext": false
+    },
+    {
+      "id": "json-cctv-news",
+      "name": "央视网",
+      "kind": "json_list",
+      "config": {
+        "url": "https://news.cctv.com/2019/07/gaiban/cmsdatainterface/page/news_1.jsonp",
+        "mode": "json_api",
+        "itemsPath": "data.list",
+        "titlePaths": [
+          "title"
+        ],
+        "summaryPaths": [
+          "brief"
+        ],
+        "urlTemplate": "{raw:url}",
+        "publishedAtPath": "focus_date",
+        "publishedAtUnit": "utc8",
+        "externalIdPath": "id",
+        "_aihot": {
+          "initialBackfillLimit": 15,
+          "maxAgeDays": 2
+        }
+      },
+      "tier": "T2",
+      "first_party": false,
+      "participation_mode": "editorial",
+      "interval_minutes": 1380,
+      "tags": [
+        "国内媒体"
+      ],
+      "site_fulltext": false,
+      "syndicate_fulltext": false
+    },
+    {
+      "id": "web-hupu-soccer",
+      "name": "虎扑足球",
+      "kind": "web_list",
+      "config": {
+        "url": "https://soccer.hupu.com/",
+        "parseMode": "html",
+        "itemSelector": "a[href*='bbs.hupu.com/']",
+        "allowUrlPrefixes": [
+          "https://bbs.hupu.com/"
+        ],
+        "detail": {
+          "maxFetches": 20,
+          "publishedAtRegex": "(\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2})"
+        },
+        "_aihot": {
+          "initialBackfillLimit": 15,
+          "maxAgeDays": 2
+        }
+      },
+      "tier": "T2",
+      "first_party": false,
+      "participation_mode": "hot_signal",
+      "interval_minutes": 1380,
+      "tags": [
+        "足球社区"
+      ],
       "site_fulltext": false,
       "syndicate_fulltext": false
     }
