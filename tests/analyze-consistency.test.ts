@@ -12,7 +12,7 @@ const sourceId = `analysis-consistency-${tag()}`;
 let hold: { entered: ReturnType<typeof gate<void>>; release: ReturnType<typeof gate<void>> } | null = null;
 const provider = await stub(async (_hit, request) => {
   const system = String(JSON.parse(request.body).messages[0]?.content ?? "");
-  const prefilter = system.includes("宽召回的AI相关性预筛");
+  const prefilter = system.includes("宽召回的足球与国内新闻相关性预筛");
   if (prefilter && hold) {
     const waiting = hold;
     waiting.entered.open();
@@ -20,8 +20,8 @@ const provider = await stub(async (_hit, request) => {
   }
   const content = prefilter ? { label: "PASS", reason: "local fixture" }
     : system.includes("事件注意力评分器") ? { attentionScore: 80 }
-    : system.includes("资料结构化助手") ? { category: "ai-models", tags: [], subjects: [], scope: "single", fact: null }
-    : { itemType: "model_release", authorRole: "principal", tags: ["模型发布"], editorialJudgment: "模型能力提升", titleZh: "实验室发布新模型", summaryZh: "实验室发布新模型，并公布了评测结果与价格。" };
+    : system.includes("资料结构化助手") ? { category: "transfer", tags: [], subjects: [], scope: "single", fact: null }
+    : { itemType: "transfer_deal", authorRole: "principal", tags: ["转会官宣"], editorialJudgment: "签约有实质进展", titleZh: "俱乐部官宣新援", summaryZh: "俱乐部官宣签下新援，并公布了合同细节。" };
   return { choices: [{ message: { content: JSON.stringify(content) } }] };
 });
 for (const name of ["DASHSCOPE_BASE_URL", "ZHIPU_BASE_URL", "DEEPSEEK_BASE_URL"]) process.env[name] = `${provider.url}/v1`;

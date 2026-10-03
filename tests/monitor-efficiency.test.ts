@@ -118,14 +118,4 @@ test("reply context reuses stored posts and one paid parent across different rep
   assert.ok(posts.every((p) => p.context[0].originalText === `post ${p.context[0].id}`));
 });
 
-test("full archive keeps its contract and advertises the polling alternative on 200 and 304", async () => {
-  const response = await app.inject({ url: "/api/v1/codex-resets" });
-  assert.equal(response.statusCode, 200);
-  assert.ok(Array.isArray(response.json().events));
-  assert.ok(Array.isArray(response.json().activities));
-  assert.ok(String(response.headers.link).startsWith(`<${config.siteUrl}/api/v1/codex-resets/recent>; rel="alternate"`));
-  const unchanged = await app.inject({ url: "/api/v1/codex-resets", headers: { "if-none-match": String(response.headers.etag) } });
-  assert.equal(unchanged.statusCode, 304);
-  assert.equal(unchanged.body, "");
-  assert.equal(unchanged.headers.link, response.headers.link);
-});
+// The Codex reset archive endpoints are not deployed here (codexResetMonitor is off in industry/features.ts).

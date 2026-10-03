@@ -23,6 +23,8 @@
       "name": "皇家马德里",
       "group": "company",
       "entityId": "real-madrid",
+      "orgNames": ["皇马", "皇家马德里"],
+      "aliases": ["皇马"],
       "tags": ["皇马", "entity:real-madrid"],
       "definition": "皇家马德里的全部动态：转会、战绩、帅位与俱乐部经营的持续追踪。",
       "related": ["barcelona", "transfer-window", "champions-league"]
@@ -32,6 +34,8 @@
       "name": "巴塞罗那",
       "group": "company",
       "entityId": "barcelona",
+      "orgNames": ["巴萨", "巴塞罗那"],
+      "aliases": ["巴萨"],
       "tags": ["巴塞罗那", "entity:barcelona"],
       "definition": "巴塞罗那的全部动态：转会、战绩、拉玛西亚青训与俱乐部经营的持续追踪。",
       "related": ["real-madrid", "transfer-window", "la-liga"]
@@ -41,6 +45,8 @@
       "name": "曼城",
       "group": "company",
       "entityId": "man-city",
+      "orgNames": ["曼城"],
+      "aliases": ["曼城"],
       "tags": ["曼城", "entity:man-city"],
       "definition": "曼城的全部动态：转会、英超与欧冠征程、俱乐部经营的持续追踪。",
       "related": ["arsenal", "premier-league", "transfer-window"]
@@ -50,6 +56,8 @@
       "name": "阿森纳",
       "group": "company",
       "entityId": "arsenal",
+      "orgNames": ["阿森纳"],
+      "aliases": ["阿森纳"],
       "tags": ["阿森纳", "entity:arsenal"],
       "definition": "阿森纳的全部动态：转会、英超争冠征程与俱乐部经营的持续追踪。",
       "related": ["man-city", "liverpool", "premier-league"]
@@ -59,6 +67,8 @@
       "name": "利物浦",
       "group": "company",
       "entityId": "liverpool",
+      "orgNames": ["利物浦"],
+      "aliases": ["利物浦"],
       "tags": ["利物浦", "entity:liverpool"],
       "definition": "利物浦的全部动态：转会、英超与欧冠征程、俱乐部经营的持续追踪。",
       "related": ["arsenal", "premier-league", "champions-league"]
@@ -68,6 +78,8 @@
       "name": "曼联",
       "group": "company",
       "entityId": "man-utd",
+      "orgNames": ["曼联"],
+      "aliases": ["曼联"],
       "tags": ["曼联", "entity:man-utd"],
       "definition": "曼联的全部动态：转会、战绩、帅位与重建进程的持续追踪。",
       "related": ["man-city", "premier-league", "transfer-window"]
@@ -77,6 +89,8 @@
       "name": "拜仁慕尼黑",
       "group": "company",
       "entityId": "bayern",
+      "orgNames": ["拜仁", "拜仁慕尼黑"],
+      "aliases": ["拜仁"],
       "tags": ["拜仁", "entity:bayern"],
       "definition": "拜仁慕尼黑的全部动态：德甲征程、转会与俱乐部经营的持续追踪。",
       "related": ["bundesliga", "champions-league", "transfer-window"]
@@ -86,6 +100,8 @@
       "name": "国际米兰",
       "group": "company",
       "entityId": "inter",
+      "orgNames": ["国米", "国际米兰"],
+      "aliases": ["国米"],
       "tags": ["国际米兰", "entity:inter"],
       "definition": "国际米兰的全部动态：意甲争冠、欧冠征程与转会的持续追踪。",
       "related": ["milan", "juventus", "serie-a"]
@@ -95,6 +111,8 @@
       "name": "AC米兰",
       "group": "company",
       "entityId": "milan",
+      "orgNames": ["AC米兰", "米兰"],
+      "aliases": ["米兰"],
       "tags": ["AC米兰", "entity:milan"],
       "definition": "AC米兰的全部动态：意甲征程、转会与管理层变动的持续追踪。",
       "related": ["inter", "juventus", "serie-a"]
@@ -104,6 +122,8 @@
       "name": "尤文图斯",
       "group": "company",
       "entityId": "juventus",
+      "orgNames": ["尤文", "尤文图斯"],
+      "aliases": ["尤文"],
       "tags": ["尤文图斯", "entity:juventus"],
       "definition": "尤文图斯的全部动态：意甲征程、转会与俱乐部经营的持续追踪。",
       "related": ["inter", "milan", "serie-a"]
@@ -113,6 +133,8 @@
       "name": "巴黎圣日耳曼",
       "group": "company",
       "entityId": "psg",
+      "orgNames": ["巴黎", "巴黎圣日耳曼"],
+      "aliases": ["巴黎"],
       "tags": ["巴黎圣日耳曼", "entity:psg"],
       "definition": "巴黎圣日耳曼的全部动态：法甲统治力、欧冠征程与转会的持续追踪。",
       "related": ["champions-league", "transfer-window", "ligue-1"]
@@ -122,6 +144,8 @@
       "name": "国足",
       "group": "company",
       "entityId": "china-national",
+      "orgNames": ["国足", "中国男足"],
+      "aliases": ["国足"],
       "tags": ["国足", "entity:china-national"],
       "definition": "中国男足的全部动态：世预赛与大赛征程、大名单、帅位与政策的持续追踪。",
       "related": ["world-cup", "chinese-super-league"]
@@ -131,6 +155,7 @@
       "name": "英超",
       "group": "field",
       "tags": ["英超"],
+      "chronicleTerms": ["英超", "英格兰超级联赛"],
       "definition": "英超联赛的争冠与保级形势、关键战报、判罚与政策的持续追踪。",
       "related": ["transfer-window", "match-reports", "champions-league"]
     },
@@ -179,6 +204,7 @@
       "name": "欧冠",
       "group": "field",
       "tags": ["欧冠"],
+      "chronicleTerms": ["欧冠", "欧洲冠军联赛"],
       "definition": "欧冠联赛的全部阶段：小组赛/联赛阶段、淘汰赛、决赛的战报与形势追踪。",
       "related": ["europa-league", "real-madrid", "man-city"]
     },
@@ -195,6 +221,7 @@
       "name": "世界杯",
       "group": "field",
       "tags": ["世界杯"],
+      "chronicleTerms": ["世界杯"],
       "definition": "世界杯的全部阶段：预选赛、正赛抽签、小组赛与淘汰赛的战报追踪。",
       "related": ["euro", "china-national"]
     },
@@ -203,6 +230,7 @@
       "name": "欧洲杯",
       "group": "field",
       "tags": ["欧洲杯"],
+      "chronicleTerms": ["欧洲杯"],
       "definition": "欧洲杯的全部阶段：预选赛、正赛与淘汰赛的战报追踪。",
       "related": ["world-cup", "champions-league"]
     },
