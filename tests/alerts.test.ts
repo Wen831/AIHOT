@@ -7,6 +7,7 @@ import { closeDb, sql } from "@aihot/backend/db";
 import { upsertMaterial } from "@aihot/backend/content/materials";
 import { getBoss, stopBoss } from "@aihot/backend/jobs/queue";
 import { checkAlerts, collectFindings, sendDigest } from "@aihot/backend/operations/alerts";
+import { sendAlert } from "@aihot/backend/notify/feishu";
 import { runsOverview } from "@aihot/backend/admin/runs";
 
 process.env.COLLECT_ENABLED = "false";
@@ -166,5 +167,33 @@ test("the ops digest does not describe unknown paid work as harmless or already 
     if (enabled === undefined) delete process.env.FEISHU_INTERNAL_ENABLED;
     else process.env.FEISHU_INTERNAL_ENABLED = enabled;
     await sql`DELETE FROM receipts WHERE logical_key='digest-unknown-impact'`;
+  }
+});
+
+// A deployment without a Feishu app sends alerts through a group custom-bot webhook instead: the URL
+// is the switch, an acknowledged card counts as sent, and a refusal throws so the next check retries.
+test("the alert webhook outlet needs no Feishu app and fails loudly when the bot refuses", async () => {
+  const WEBHOOK = "https://alert-bot.invalid/hook";
+  const seen: Array<{ msg_type: string; card: { header: { title: { content: string } }; elements: Array<{ text?: { content: string } }> } }> = [];
+  const realFetch = globalThis.fetch;
+  const outerUrl = process.env.ALERT_WEBHOOK_URL;
+  process.env.ALERT_WEBHOOK_URL = WEBHOOK;
+  // Exercise the live branch entirely in-process; any unexpected network request fails the test.
+  globalThis.fetch = (async (input, init) => {
+    assert.equal(String(input), WEBHOOK);
+    seen.push(JSON.parse(String(init?.body)));
+    return Response.json({ code: 0 });
+  }) as typeof fetch;
+  try {
+    assert.equal(await sendAlert("🔴 测试告警", ["影响：测试", "你需要：无"]), "sent");
+    assert.equal(seen[0]!.msg_type, "interactive");
+    assert.match(seen[0]!.card.header.title.content, /测试告警/);
+    assert.match(seen[0]!.card.elements[0]!.text!.content, /影响：测试/);
+    globalThis.fetch = (async () => Response.json({ code: 234001, msg: "no such bot" })) as typeof fetch;
+    await assert.rejects(sendAlert("再次测试", ["一行"]), /alert webhook/);
+  } finally {
+    globalThis.fetch = realFetch;
+    if (outerUrl === undefined) delete process.env.ALERT_WEBHOOK_URL;
+    else process.env.ALERT_WEBHOOK_URL = outerUrl;
   }
 });

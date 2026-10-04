@@ -1,5 +1,6 @@
 // Feishu delivery. Two separate apps: the login app (admin OAuth) and the message app (internal
-// feedback chat, operations alert chat, image upload). Content groups use custom bot webhooks.
+// feedback chat, operations alert chat, image upload). Content groups use custom bot webhooks, and
+// alerts may also go to one (ALERT_WEBHOOK_URL, a bot in an alerts-only group).
 // Alerts and feedback never go to content groups, and content never goes to internal chats.
 // Everything outward is off unless explicitly enabled (development and tests stay silent).
 import { readFile, unlink } from "node:fs/promises";
@@ -115,7 +116,19 @@ export function formatRecovery(title: string, since: Date, now: number): { title
 /** Operations alert: the alert chat, falling back to the internal feedback chat — never a content group. */
 export async function sendAlert(title: string, lines: string[]): Promise<"sent" | "disabled"> {
   // Production needs no label; any other environment that has sending on says which one it is.
-  const text = `${config.environmentName === "production" ? "" : `【${config.environmentName}】`}${title}\n${lines.join("\n")}`;
+  const label = config.environmentName === "production" ? "" : `【${config.environmentName}】`;
+  const text = `${label}${title}\n${lines.join("\n")}`;
+  // A group custom-bot webhook serves deployments without a Feishu app: setting the URL is the switch.
+  const webhook = credential("integrations", "ALERT_WEBHOOK_URL");
+  if (webhook) {
+    const { status, body } = await postWebhook(webhook, {
+      header: { title: { tag: "plain_text", content: `${label}${title}` }, template: "orange" },
+      elements: [{ tag: "div", text: { tag: "lark_md", content: lines.join("\n") || "—" } }],
+    });
+    // A refusal must not mark the alert sent: throw so the next check tries again.
+    if (status !== "sent") throw new Error(`alert webhook: ${body}`);
+    return "sent";
+  }
   if (!feishuInternalEnabled()) {
     console.log(JSON.stringify({ level: "warn", msg: "alert (not sent: FEISHU_INTERNAL_ENABLED is off)", title, lines }));
     return "disabled";
