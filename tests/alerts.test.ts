@@ -2,6 +2,7 @@
 // allows (hourly for reader impact), closed with one recovery message.
 import { tag } from "./setup.ts";
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
 import { after, before, test } from "node:test";
 import { closeDb, sql } from "@aihot/backend/db";
 import { upsertMaterial } from "@aihot/backend/content/materials";
@@ -195,5 +196,33 @@ test("the alert webhook outlet needs no Feishu app and fails loudly when the bot
     globalThis.fetch = realFetch;
     if (outerUrl === undefined) delete process.env.ALERT_WEBHOOK_URL;
     else process.env.ALERT_WEBHOOK_URL = outerUrl;
+  }
+});
+
+// Bots with signature verification on get Feishu's sign alongside the card: HMAC-SHA256 keyed by
+// "<timestamp>\n<secret>" with an empty message, base64-encoded.
+test("the alert webhook signs when the bot's secret is configured", async () => {
+  const WEBHOOK = "https://alert-bot.invalid/hook";
+  const SECRET = "test-alert-secret";
+  let body: { timestamp?: string; sign?: string } = {};
+  const realFetch = globalThis.fetch;
+  const outerUrl = process.env.ALERT_WEBHOOK_URL;
+  const outerSecret = process.env.ALERT_WEBHOOK_SECRET;
+  process.env.ALERT_WEBHOOK_URL = WEBHOOK;
+  process.env.ALERT_WEBHOOK_SECRET = SECRET;
+  globalThis.fetch = (async (_input, init) => {
+    body = JSON.parse(String(init?.body));
+    return Response.json({ code: 0 });
+  }) as typeof fetch;
+  try {
+    assert.equal(await sendAlert("签名测试", ["一行"]), "sent");
+    assert.ok(body.timestamp, "the signed request carries a timestamp");
+    assert.equal(body.sign, createHmac("sha256", `${body.timestamp}\n${SECRET}`).update("").digest("base64"));
+  } finally {
+    globalThis.fetch = realFetch;
+    if (outerUrl === undefined) delete process.env.ALERT_WEBHOOK_URL;
+    else process.env.ALERT_WEBHOOK_URL = outerUrl;
+    if (outerSecret === undefined) delete process.env.ALERT_WEBHOOK_SECRET;
+    else process.env.ALERT_WEBHOOK_SECRET = outerSecret;
   }
 });

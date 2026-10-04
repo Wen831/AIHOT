@@ -4,6 +4,7 @@
 // Alerts and feedback never go to content groups, and content never goes to internal chats.
 // Everything outward is off unless explicitly enabled (development and tests stay silent).
 import { readFile, unlink } from "node:fs/promises";
+import { createHmac } from "node:crypto";
 import path from "node:path";
 import { beijingDate, beijingTime } from "@aihot/contracts/time";
 import { config, credential } from "../config.ts";
@@ -121,10 +122,15 @@ export async function sendAlert(title: string, lines: string[]): Promise<"sent" 
   // A group custom-bot webhook serves deployments without a Feishu app: setting the URL is the switch.
   const webhook = credential("integrations", "ALERT_WEBHOOK_URL");
   if (webhook) {
-    const { status, body } = await postWebhook(webhook, {
-      header: { title: { tag: "plain_text", content: `${label}${title}` }, template: "orange" },
-      elements: [{ tag: "div", text: { tag: "lark_md", content: lines.join("\n") || "—" } }],
-    });
+    const secret = credential("integrations", "ALERT_WEBHOOK_SECRET") ?? undefined;
+    const { status, body } = await postWebhook(
+      webhook,
+      {
+        header: { title: { tag: "plain_text", content: `${label}${title}` }, template: "orange" },
+        elements: [{ tag: "div", text: { tag: "lark_md", content: lines.join("\n") || "—" } }],
+      },
+      secret,
+    );
     // A refusal must not mark the alert sent: throw so the next check tries again.
     if (status !== "sent") throw new Error(`alert webhook: ${body}`);
     return "sent";
@@ -203,12 +209,16 @@ export async function forwardFeedbackToFeishu(id: number): Promise<"sent" | "dis
   }
 }
 
-/** Custom-bot webhook for content groups (selected cards, reset pushes). */
-export async function postWebhook(url: string, card: unknown): Promise<{ status: "sent" | "failed" | "unknown"; body: string }> {
+/** Custom-bot webhook for content groups (selected cards, reset pushes) and alerts. */
+export async function postWebhook(url: string, card: unknown, secret?: string): Promise<{ status: "sent" | "failed" | "unknown"; body: string }> {
+  // Bots with signature verification on: Feishu signs with the key "<timestamp>\n<secret>" and an empty
+  // message, and rejects timestamps more than an hour away.
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const sign = secret ? createHmac("sha256", `${timestamp}\n${secret}`).update("").digest("base64") : undefined;
   const res = await fetch(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ msg_type: "interactive", card }),
+    body: JSON.stringify({ ...(sign && { timestamp, sign }), msg_type: "interactive", card }),
     signal: AbortSignal.timeout(15_000),
   });
   const body = await res.text();
