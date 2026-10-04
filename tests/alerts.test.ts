@@ -46,9 +46,20 @@ test("an outage is announced once, repeated hourly, and closed with one recovery
     r = await checkAlerts(t0 + 61 * 60_000);
     assert.deepEqual(stuck(r.sent), ["content.process"], "hourly reminder while it lasts");
 
-    await sql`UPDATE articles SET processing_state = 'analyzed' WHERE id IN ${sql(stuckIds)}`;
-    r = await checkAlerts(t0 + 70 * 60_000);
+    // Recovery cards state the outcome, not the fault: a title repeating the alert reads, in the
+    // message list, as if the problem were still being reported. The original alert stays in the body.
+    const logs: string[] = [];
+    const log = console.log;
+    console.log = (value: unknown) => logs.push(String(value));
+    try {
+      await sql`UPDATE articles SET processing_state = 'analyzed' WHERE id IN ${sql(stuckIds)}`;
+      r = await checkAlerts(t0 + 70 * 60_000);
+    } finally {
+      console.log = log;
+    }
     assert.deepEqual(stuck(r.sent), ["content.process:recovered"]);
+    assert.match(logs.join("\n"), /已恢复：新内容处理已恢复/);
+    assert.match(logs.join("\n"), /原告警：新内容卡住了，进不了网站/);
     r = await checkAlerts(t0 + 80 * 60_000);
     assert.deepEqual(stuck(r.sent), []);
   } finally {

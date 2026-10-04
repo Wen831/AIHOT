@@ -37,6 +37,7 @@ export async function collectFindings(now = Date.now()): Promise<Finding[]> {
         key: "content.collect",
         level: "now",
         title: "网站停止收录新内容",
+        recoveredTitle: "网站收录已恢复",
         impact: last?.at ? `最后一篇新文章收录于 ${beijingStamp(last.at)}，之后网站不会出现新内容` : "很久没有收录任何新文章",
         heals: "没有",
         action: "转给 AI 立即处理",
@@ -54,6 +55,7 @@ export async function collectFindings(now = Date.now()): Promise<Finding[]> {
         key: "content.grouping",
         level: "now",
         title: "有精选新闻卡在去重确认，暂未发布",
+        recoveredTitle: "卡住的精选新闻已恢复发布",
         impact: `${waiting.length} 条已达到精选条件的新闻等待确认超过 10 分钟，还没进入精选，读者可能晚看到这些更新`,
         heals: manual ? `${manual} 条需要人工处理后才能恢复${manual < waiting.length ? "；其余仍在自动恢复" : ""}`
           : receipt ? "仍在等待自动恢复；付费结果未知的请求会在 30 分钟后自动放行一次" : "还会自动重试，但等待已经超过正常范围",
@@ -76,6 +78,7 @@ export async function collectFindings(now = Date.now()): Promise<Finding[]> {
         key: "content.process",
         level: "now",
         title: "新内容卡住了，进不了网站",
+        recoveredTitle: "新内容处理已恢复",
         impact: [p!.waiting >= 10 && `${p!.waiting} 篇新文章等了 2 小时以上还没处理完`, p!.failed >= 20 && `最近 3 小时 ${p!.failed} 篇新文章处理失败`]
           .filter(Boolean)
           .join("；") + "，精选和热点会缺内容",
@@ -93,6 +96,7 @@ export async function collectFindings(now = Date.now()): Promise<Finding[]> {
           key: "report.daily",
           level: "now",
           title: "今天的日报还没生成",
+          recoveredTitle: "今日日报已生成",
           impact: "读者看不到今天的日报",
           heals: "系统每半小时补做一次，到现在还没成功",
           action: "转给 AI 处理",
@@ -114,6 +118,7 @@ export async function collectFindings(now = Date.now()): Promise<Finding[]> {
       key: "deliveries.failed",
       level: "today",
       title: "飞书内容群有推送没发出去",
+      recoveredTitle: "飞书内容群推送恢复正常",
       impact: `过去 24 小时 ${refused!.n} 条精选或重置通知没进${refused!.target ?? "内容群"}`,
       heals: "不会自动重发",
       action: "转给 AI 处理；如果推送机器人被移出了群，需要你把它加回去",
@@ -130,6 +135,7 @@ export async function collectFindings(now = Date.now()): Promise<Finding[]> {
       key: "monitor.stuck",
       level: "today",
       title: "Codex 重置监控卡住了",
+      recoveredTitle: "Codex 重置监控已恢复",
       impact: "新的重置消息确认不了，内容群收不到重置通知",
       heals: "暂时没有",
       action: "转给 AI 处理",
@@ -144,6 +150,7 @@ export async function collectFindings(now = Date.now()): Promise<Finding[]> {
       key: "monitor.review",
       level: "today",
       title: "有 Codex 重置消息需要你确认",
+      recoveredTitle: "待复核的重置消息已处理",
       impact: "系统对这几条帖子的判断没把握，结论暂时没有生效，也没有推送",
       heals: "不会",
       action: "到后台“Codex 重置 → 帖子与识别 → 需复核”看一下；确认后需要的话在群里说明",
@@ -167,6 +174,7 @@ export async function collectFindings(now = Date.now()): Promise<Finding[]> {
         key: "backup.failed",
         level: "today",
         title: "数据库备份连续两天没成功",
+        recoveredTitle: "数据库备份已恢复正常",
         impact: lastOk ? `万一服务器出事，最近 ${duration(age)} 的数据可能无法完整恢复` : "还没有成功的完整备份，服务器出事时可能无法恢复数据",
         heals: "不会",
         action: "转给 AI 处理",
@@ -250,6 +258,7 @@ async function providerFindings(): Promise<Finding[]> {
       key: `provider.refused.${p.service}`,
       level: "today",
       title: `${providerName(p.service)} 拒绝服务，可能欠费或账号失效`,
+      recoveredTitle: `${providerName(p.service)} 已恢复服务`,
       impact: providerStops(p.service),
       heals: "不会",
       action: `去${providerConsole(p.service)}看余额和账号状态；充值或恢复后系统会自动继续`,
@@ -265,6 +274,7 @@ async function providerFindings(): Promise<Finding[]> {
       key: `budget.day.${c.service}`,
       level: "today",
       title: `${providerName(c.service)} 过去 24 小时的调用额度用完了`,
+      recoveredTitle: `${providerName(c.service)} 调用额度已恢复`,
       impact: `${providerStops(c.service)}，直到额度随时间腾出来`,
       heals: "会，额度按 24 小时滚动恢复",
       action: "这次不用处理；如果经常出现，再决定要不要调高额度",
@@ -275,7 +285,7 @@ async function providerFindings(): Promise<Finding[]> {
 }
 
 interface AlertState {
-  [key: string]: { title: string; since: string; sentAt: string };
+  [key: string]: { title: string; recoveredTitle?: string; since: string; sentAt: string };
 }
 
 /** Every 10 minutes: new problems and recoveries of the now/today levels go out; digest items wait for 09:00. */
@@ -290,12 +300,12 @@ export async function checkAlerts(now = Date.now()) {
     const since = open ? new Date(open.since) : (f.since ?? new Date(now));
     const msg = formatAlert(f, since, now, !!open);
     await sendAlert(msg.title, msg.lines);
-    state[f.key] = { title: f.title, since: since.toISOString(), sentAt: new Date(now).toISOString() };
+    state[f.key] = { title: f.title, recoveredTitle: f.recoveredTitle, since: since.toISOString(), sentAt: new Date(now).toISOString() };
     sent.push(f.key);
   }
   for (const [key, open] of Object.entries(state)) {
     if (found.some((f) => f.key === key)) continue;
-    const msg = formatRecovery(open.title, new Date(open.since), now);
+    const msg = formatRecovery(open, new Date(open.since), now);
     await sendAlert(msg.title, msg.lines);
     sent.push(`${key}:recovered`);
     delete state[key];

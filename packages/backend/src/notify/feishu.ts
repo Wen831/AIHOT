@@ -72,6 +72,8 @@ export interface Finding {
   level: Level;
   /** Plain words: no queue, unit or table names. */
   title: string;
+  /** The good outcome, for the recovery card's title: fault wording there reads as if the problem is still open. */
+  recoveredTitle?: string;
   /** What readers see, or what it costs. */
   impact?: string;
   /** Whether it heals by itself. */
@@ -110,8 +112,12 @@ export function formatAlert(f: Finding, since: Date, now: number, repeat = false
   return { title: `${MARK[level]} ${repeat ? "仍未恢复：" : ""}${f.title}${lasting}`, lines: lines.filter((l): l is string => !!l) };
 }
 
-export function formatRecovery(title: string, since: Date, now: number): { title: string; lines: string[] } {
-  return { title: `✅ 已恢复：${title}`, lines: [`持续 ${duration(now - since.getTime())}（${beijingStamp(since)} 起）`] };
+/** The message for a closed problem: the title carries the good news, the body keeps the original alert for reference. */
+export function formatRecovery(f: Pick<Finding, "title" | "recoveredTitle">, since: Date, now: number): { title: string; lines: string[] } {
+  return {
+    title: `✅ 已恢复：${f.recoveredTitle ?? f.title}`,
+    lines: [`恢复通知（原告警：${f.title}，自 ${beijingStamp(since)} 起，持续 ${duration(now - since.getTime())}）`],
+  };
 }
 
 /** Operations alert: the alert chat, falling back to the internal feedback chat — never a content group. */

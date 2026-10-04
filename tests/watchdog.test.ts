@@ -65,7 +65,10 @@ test("one alert when the worker stops, none while it stays stopped, one recovery
   await checkWorkerHeartbeat();
   await checkWorkerHeartbeat();
   assert.equal(attempts.length, 2);
-  assert.match(attempts[1]!, /已恢复/);
+  const [recoveredTitle] = attempts[1]!.split("\n");
+  assert.match(recoveredTitle!, /已恢复：后台处理服务已恢复运行/);
+  assert.doesNotMatch(recoveredTitle!, /停了/, "the recovery title says the outcome, not the fault");
+  assert.match(attempts[1]!, /原告警：后台处理服务停了/);
 });
 
 test("a failed send is tried again at the next check", async () => {
