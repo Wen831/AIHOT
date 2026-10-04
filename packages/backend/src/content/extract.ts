@@ -65,6 +65,8 @@ export async function extractFromUrl(url: string, subject: string): Promise<Extr
     return { html, text, images: [], via: "jina" };
   } catch (error) {
     if (error instanceof BudgetExceededError) return null;
+    // A fallback provider without a key is "no fallback", not a per-article failure.
+    if (error instanceof Error && error.message.includes("JINA_API_KEY")) return null;
     throw error;
   }
 }
