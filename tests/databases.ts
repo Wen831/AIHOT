@@ -60,6 +60,12 @@ export async function globalTeardown() {
 
 // Worker threads a file starts inherit the preload and its copy.
 if (process.env.NODE_TEST_CONTEXT && isMainThread) {
+  // The deployment's own outlets must never reach a test run: a real ALERT_WEBHOOK_URL makes sendAlert
+  // post test findings to the operators' group, and a Feishu app channel does the same (seen
+  // 2026-10-05). Tests that exercise a channel set and restore their own values.
+  delete process.env.ALERT_WEBHOOK_URL;
+  delete process.env.ALERT_WEBHOOK_SECRET;
+  delete process.env.FEISHU_INTERNAL_ENABLED;
   const copy = `${name}_f${process.pid}_${suffix}`;
   await onServer((db) => db`CREATE DATABASE ${db(copy)} TEMPLATE ${db(name)}`);
   process.env.DATABASE_URL = urlOf(copy);

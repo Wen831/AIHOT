@@ -84,3 +84,65 @@ test("empty older gaps cannot starve a later daily, weekly or monthly, and failu
     assert.ok(await report(kind!, key!), `${kind} ${key} was recovered past the empty gaps`);
   }
 });
+
+// An issue older than the data's first day never compiles and is skipped outright (an import brings it
+// back); an issue inside the data range that fails gets a doubling pause per failure and is given up
+// after six tries — settings holds the counter, the message no longer carries the given-up issue.
+test("issues before the data are skipped, an in-range failure backs off and is given up after six", async () => {
+  const clear = async () => sql`DELETE FROM settings WHERE key = 'reports.compose.failures'`;
+  const monthlyRow = (key: string) => sql`INSERT INTO reports (kind, key, window_start, window_end, content, generated_at)
+    VALUES ('monthly', ${key}, now(), now(), ${sql.json({})}, now())`;
+  await clear();
+  try {
+    // Data starts 2024-03-05; an older published monthly (2024-01) pulls the loop over the skipped gap.
+    await item("2024-03-05T12:00:00Z");
+    await monthlyRow("2024-01");
+    await assert.rejects(composeDueReports(new Date("2024-05-02T03:00:00Z")), (e: Error) => {
+      assert.match(e.message, /monthly:2024-04/);
+      assert.doesNotMatch(e.message, /monthly:2024-02/);
+      return true;
+    }, "the month before the data is skipped, not failed");
+    assert.ok(!(await sql`SELECT 1 FROM settings WHERE key = 'reports.compose.failures' AND value ? 'monthly:2024-02'`).length, "a skipped issue leaves no failure mark");
+    // A daily appearing in February moves the data day back: the skipped issue returns and compiles.
+    const feb = await item("2024-02-15T12:00:00Z");
+    await sql`INSERT INTO reports (kind, key, window_start, window_end, content, generated_at)
+      VALUES ('daily', '2024-02-15', now(), now(), ${sql.json({ sections: [{ label: "行业动态", items: [{ itemId: feb, title: feb }] }] })}, now())`;
+    await clear();
+    // The run still fails on the many empty dailies; the message carries both lists.
+    const message = await composeDueReports(new Date("2024-05-02T03:00:00Z")).then(
+      () => "",
+      (e: Error) => e.message,
+    );
+    assert.match(message.split(" failed; ")[1] ?? "", /monthly:2024-02/);
+    assert.doesNotMatch(message.split(" failed; ")[0], /monthly:2024-01/);
+    await clear();
+    // The due month 2024-04 holds no dailies: it fails, waits out a doubling pause per failure, and is
+    // given up after the sixth attempt (the message stops carrying it, settings keeps the counter).
+    await assert.rejects(composeDueReports(new Date("2024-05-02T03:00:00Z")), /monthly:2024-04/);
+    // Backoff: a minute later every pause is still elapsing — nothing is retried and nothing failed
+    // again; each elapsed pause buys one more try; the sixth failure gives the issue up.
+    const quiet = await composeDueReports(new Date("2024-05-02T03:10:00Z")).then(
+      (r) => JSON.stringify(r),
+      (e: Error) => e.message,
+    );
+    assert.doesNotMatch(quiet, /monthly:2024-04/, "a pause that has not elapsed skips the retry");
+    let t = Date.parse("2024-05-02T03:00:00Z");
+    for (let attempt = 2; attempt <= 6; attempt++) {
+      t += (2 ** (attempt - 1) * 30 + 1) * 60_000;
+      await assert.rejects(composeDueReports(new Date(t)), /monthly:2024-04/, `attempt ${attempt} runs once its pause has elapsed`);
+    }
+    t += 9 * 3600_000;
+    // Given up: the monthly and the given-up daily are gone from the outcome (a new day's empty daily
+    // may fail as its own first attempt — that is a fresh failure, not the retried one).
+    const outcome = await composeDueReports(new Date(t)).then(
+      (r) => JSON.stringify(r),
+      (e: Error) => e.message,
+    );
+    assert.doesNotMatch(outcome, /monthly:2024-04/);
+    assert.doesNotMatch(outcome, /daily:2024-05-02/);
+    const [mark] = await sql`SELECT (value->'monthly:2024-04'->>'count')::int AS count FROM settings WHERE key = 'reports.compose.failures'`;
+    assert.equal(mark!.count, 6);
+  } finally {
+    await clear();
+  }
+});

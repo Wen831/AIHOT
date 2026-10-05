@@ -280,10 +280,35 @@ const nextMonth = (label: string) => {
  * The newest one appears at the first run after it falls due (above); a long stop or an older gap is
  * filled too. A kind with no issue yet only gets its latest due one. An issue that fails does not hold
  * up the others; at most `limit` issues are written per run, the next run continues.
+ *
+ * Issues older than the data's first day can never compile (their windows hold no articles): they are
+ * skipped outright instead of failing forever, and a later import moves the first day back, so skipped
+ * issues return to the range on their own.
+ *
+ * A failing issue inside the data range is retried with a growing pause and given up after
+ * COMPOSE_MAX_ATTEMPTS tries: the counters live in settings, the pause doubles per failure, and an
+ * issue that succeeded clears its mark. Without this, an issue that keeps failing (a model outage, a
+ * malformed window) is retried every half hour forever. A later success clears the mark; re-running
+ * the compose once the cause is fixed revives the issue the same way.
  */
+const COMPOSE_MAX_ATTEMPTS = 6;
+const COMPOSE_FAILURES_KEY = "reports.compose.failures";
+const composeBackoffMs = (count: number) => 30 * 60_000 * 2 ** (count - 1); // 30m, 1h, 2h, 4h, 8h, …
+
+/** The issue key that holds a given day, per kind (labels compare in order within a kind). */
+const issueOf = (day: string, kind: ReportKind) =>
+  kind === "daily" ? day
+  : kind === "monthly" ? day.slice(0, 7)
+  : isoWeekLabel(day);
+
 export async function composeDueReports(now = new Date(), limit = 8): Promise<{ generated: string[]; failed: string[] }> {
   const generated: string[] = [];
   const failed: string[] = [];
+  const failures = await sql<{ value: Record<string, { count: number; lastAt: string }> }[]>`SELECT value FROM settings WHERE key = ${COMPOSE_FAILURES_KEY}`
+    .then((rows) => rows[0]?.value ?? {} as Record<string, { count: number; lastAt: string }>);
+  let failuresChanged = false;
+  const [firstDay] = await sql<{ day: string | null }[]>`SELECT to_char(min(discovered_at) AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD') AS day FROM articles`;
+  const dataDay = firstDay?.day ?? null; // issues entirely before this day hold no articles, ever
   const kinds: Array<{ kind: ReportKind; due: string; next: (k: string) => string; compose: (k: string) => Promise<unknown> }> = [
     { kind: "daily", due: dueDaily(now), next: (k) => addDays(k, 1), compose: composeDaily },
     { kind: "weekly", due: dueWeekly(now), next: nextWeek, compose: composeWeekly },
@@ -292,17 +317,34 @@ export async function composeDueReports(now = new Date(), limit = 8): Promise<{ 
   kinds: for (const k of kinds) {
     const have = new Set((await sql<{ key: string }[]>`SELECT key FROM reports WHERE kind = ${k.kind}`).map((r) => r.key));
     const first = [...have].sort()[0] ?? k.due;
+    const dataKey = dataDay ? issueOf(dataDay, k.kind) : null; // the issue holding the data's first day; earlier ones are skipped
     for (let key = first; key <= k.due; key = k.next(key)) {
       if (have.has(key)) continue;
+      if (dataKey && key < dataKey) continue; // before any data exists: nothing to compile, and an import brings it back
       if (shutdownSignal.signal.aborted || generated.length >= limit) break kinds;
+      const failKey = `${k.kind}:${key}`;
+      const failure = failures[failKey];
+      if (failure) {
+        if (failure.count >= COMPOSE_MAX_ATTEMPTS) continue; // given up; stays visible in settings, and a fixed cause plus a cleared mark revives it
+        if (now.getTime() - Date.parse(failure.lastAt) < composeBackoffMs(failure.count)) continue; // waiting out the pause
+      }
       try {
         await k.compose(key);
         generated.push(`${k.kind}:${key}`);
+        if (failure) delete failures[failKey];
+        failuresChanged = failuresChanged || !!failure;
       } catch (error) {
         failed.push(`${k.kind}:${key}`);
-        console.error(JSON.stringify({ level: "error", msg: "report failed", report: `${k.kind}:${key}`, error: String(error).slice(0, 300) }));
+        const count = (failure?.count ?? 0) + 1;
+        failures[failKey] = { count, lastAt: new Date(now).toISOString() };
+        failuresChanged = true;
+        console.error(JSON.stringify({ level: "error", msg: count >= COMPOSE_MAX_ATTEMPTS ? "report given up" : "report failed", report: `${k.kind}:${key}`, attempts: count, error: String(error).slice(0, 300) }));
       }
     }
+  }
+  if (failuresChanged || Object.keys(failures).length) {
+    await sql`INSERT INTO settings (key, value, updated_by) VALUES (${COMPOSE_FAILURES_KEY}, ${sql.json(failures as never)}, 'worker')
+              ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`;
   }
   if (failed.length) throw new Error(`reports: ${failed.join(", ")} failed${generated.length ? `; ${generated.join(", ")} written` : ""}`);
   return { generated, failed };
