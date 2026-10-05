@@ -118,6 +118,12 @@ function hostOf(url: string): string {
   }
 }
 
+/** Average stars a showcase repo gained per day since its baseline; null until a day has passed. */
+function showcaseGrowth(s: NonNullable<SiteItemDetail["showcase"]>): number | null {
+  const days = (Date.parse(s.measuredAt) - Date.parse(s.firstAt)) / 86_400_000;
+  return days >= 1 ? Math.round((s.stars - s.starsFirst) / days) : null;
+}
+
 async function shareOrCopy(item: Pick<SiteItemDetail, "id" | "title">): Promise<"shared" | "copied" | null> {
   const url = `${siteUrl()}/items/${item.id}`;
   try {
@@ -466,7 +472,23 @@ function ItemView({ item }: { item: SiteItemDetail }) {
             )}
           </div>
           {!isX && <h1 data-page-title="" className="text-[26px] font-bold leading-[1.38] tracking-[-0.01em] text-ink lg:text-[32px] lg:leading-[1.34] xl:text-[36px] xl:leading-[1.3]">{item.title}</h1>}
-          {!isX && item.originalTitle && <p className="mt-2.5 text-[14px] leading-relaxed text-ink-4">{item.originalTitle}</p>}
+          {!isX && item.originalTitle && (item.showcase ? (
+            <div className="mt-3 text-[13px] leading-relaxed">
+              <a href={item.links.original} target="_blank" rel="noreferrer" className="mono text-ink-3 underline decoration-line-soft underline-offset-4 transition-colors hover:text-accent">
+                {item.originalTitle}
+              </a>
+              <p className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-ink-3">
+                <span>⭐ {item.showcase.stars.toLocaleString()}</span>
+                {(() => { const g = showcaseGrowth(item.showcase!); return g !== null ? <span>+{g.toLocaleString()}/日</span> : null; })()}
+                {item.showcase.forks !== null && <span>Fork {item.showcase.forks.toLocaleString()}</span>}
+                {item.showcase.language && <span>{item.showcase.language}</span>}
+                <span>GitHub Trending 今日上榜</span>
+                <span suppressHydrationWarning className="text-ink-4">测于 {relativeTime(item.showcase.measuredAt)}</span>
+              </p>
+            </div>
+          ) : (
+            <p className="mt-2.5 text-[14px] leading-relaxed text-ink-4">{item.originalTitle}</p>
+          ))}
 
           {item.summary && (
             <section className={isX ? "mt-4" : "mt-7 xl:mt-8"}>

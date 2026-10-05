@@ -37,6 +37,17 @@ export interface StoryRef {
   title: string;
 }
 
+/** Measured GitHub repo state of a showcase item (the daily trending): values as of `measuredAt`. */
+export interface ShowcaseStats {
+  stars: number;
+  /** Stars when first stored: the baseline the daily growth reads against. */
+  starsFirst: number;
+  forks: number | null;
+  language: string | null;
+  firstAt: string;
+  measuredAt: string;
+}
+
 /** What every site answer about an article carries; a card and a page each add the X post in their own form. */
 export interface ItemSummary {
   id: string;
@@ -55,10 +66,12 @@ export interface ItemSummary {
   selected: boolean;
   channel: "news" | "x";
   story: StoryRef | null;
+  /** A showcase item's measured GitHub state; null when never measured (the API was out of reach). */
+  showcase: ShowcaseStats | null;
 }
 
 /** The fields rendered by a site feed card; full original text lives in the item detail. */
-export interface FeedItemSummary extends Pick<ItemSummary, "id" | "title" | "summary" | "reason" | "source" | "publishedAt" | "timelineAt" | "category" | "tags" | "score" | "selected" | "channel"> {
+export interface FeedItemSummary extends Pick<ItemSummary, "id" | "title" | "summary" | "reason" | "source" | "publishedAt" | "timelineAt" | "category" | "tags" | "score" | "selected" | "channel" | "showcase"> {
   x: (Pick<XPostView, "authorName" | "handle" | "avatarUrl" | "avatarSrcSet" | "media"> & {
     quoted: Omit<NonNullable<XPostView["quoted"]>, "url"> | null;
   }) | null;

@@ -75,6 +75,11 @@ export const FeedItem = memo(function FeedItem({ item, group, filters, read = fa
               {item.title}
             </IntentLink>
           </h3>
+          {item.showcase && (
+            <p className="mt-0.5 text-[12.5px] leading-[1.6] text-ink-4 lg:mt-1">
+              ⭐ {item.showcase.stars.toLocaleString()}{item.showcase.language ? ` · ${item.showcase.language}` : ""}
+            </p>
+          )}
           {item.summary && <p className="mt-1 line-clamp-2 text-[14.5px] leading-[1.7] text-ink-3 lg:mt-2 lg:line-clamp-3 lg:text-[15px] lg:leading-[1.75]">{item.summary}</p>}
         </>
       )}

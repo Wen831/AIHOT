@@ -8,6 +8,7 @@ import { queueProcessing } from "../jobs/content.ts";
 import { BudgetExceededError, completeReceipt } from "../providers/receipts.ts";
 import { fetchRss } from "./rss.ts";
 import { allowed, fetchDetail, fetchWebList, type DetailNeed } from "./web-list.ts";
+import { fetchRepoStats, repoOwnerRepo } from "./github.ts";
 import { unsupportedConfig } from "./config-keys.ts";
 import { fetchJsonList } from "./json-list.ts";
 import { fetchXSearch, planXShards, readXSearch, shardHandle, shardQuery, selfThreadHandle, SHARDABLE_SQL, tweetToCandidate, type XBacklog } from "./x.ts";
@@ -131,6 +132,7 @@ export async function collectSource(sourceId: string, opts: { force?: boolean } 
     let paidReceiptIds: number[] = [];
     let nextCursor: Record<string, unknown> = { ...(source.cursor ?? {}) };
     let detail: Record<string, unknown> | null = null;
+    let showcaseFeedKeys: string[] = [];
     if (source.kind === "rss") {
       const rss = await fetchRss(source, opts);
       candidates = rss.candidates;
@@ -189,6 +191,9 @@ export async function collectSource(sourceId: string, opts: { force?: boolean } 
     if (source.participation_mode === "showcase") {
       const cap = Number(source.config._aihot?.maxItemsPerRound ?? 10);
       const keys = candidates.map((c) => c.identityKey!).filter(Boolean);
+      // The whole feed (not just what this round will store) is what stats track: a listed repo
+      // already stored still gets its fresh reading.
+      showcaseFeedKeys = [...new Set(keys)];
       const storedKeys = keys.length
         ? new Set((await sql<{ identity_key: string }[]>`SELECT identity_key FROM articles WHERE source_id = ${sourceId} AND identity_key = ANY(${keys}::text[])`).map((r) => r.identity_key))
         : new Set<string>();
@@ -246,6 +251,10 @@ export async function collectSource(sourceId: string, opts: { force?: boolean } 
 
     ({ created, revised } = await store(sourceId, candidates, firstImport ? "first-import" : null));
 
+    // Showcase stats: the feed carries no stars. Measure everything today's feed still lists — new
+    // items get their baseline, listed old ones a fresh reading; GitHub out of reach leaves them as they are.
+    if (source.participation_mode === "showcase") await refreshShowcaseStats(sourceId, showcaseFeedKeys);
+
     if (firstImport) nextCursor.initializedAt = new Date().toISOString();
     nextCursor.lastOkAt = new Date().toISOString();
     await sql.begin(async (tx) => {
@@ -263,6 +272,47 @@ export async function collectSource(sourceId: string, opts: { force?: boolean } 
 
 /** X ids begin with their millisecond timestamp (since 2010-11-04): the smallest id of a post made at `ms`. */
 const xIdAt = (ms: number) => (BigInt(Math.max(0, ms - 1288834974657)) << 22n);
+
+/** Hours a stored measurement stays fresh: re-collections and retries within it do not re-buy API calls. */
+const SHOWCASE_MEASURE_MIN_HOURS = 12;
+/** How long an item stays measured with its feed appearances; after that its growth line freezes. */
+const SHOWCASE_TRACK_DAYS = 7;
+
+/**
+ * Measures every item of today's round still within the tracking window: a new item gets its
+ * baseline (starsFirst), a measured one keeps it and updates the current value — their difference
+ * is the daily growth the item page shows. GitHub out of reach leaves the stored stats untouched,
+ * and the UI hides or dates them.
+ */
+async function refreshShowcaseStats(sourceId: string, identityKeys: string[]): Promise<void> {
+  const keys = [...new Set(identityKeys.filter(Boolean))];
+  if (!keys.length) return;
+  const rows = await sql<{ id: string; url: string; showcase_stats: Record<string, any> | null }[]>`
+    SELECT id, url, showcase_stats FROM articles
+    WHERE source_id = ${sourceId} AND identity_key = ANY(${keys}::text[])
+      AND discovered_at > now() - ${`${SHOWCASE_TRACK_DAYS} days`}::interval`;
+  const repos = rows
+    .map((row) => ({ row, repo: repoOwnerRepo(row.url) }))
+    .filter((entry): entry is { row: typeof rows[number]; repo: string } => {
+      if (!entry.repo) return false;
+      const at = entry.row.showcase_stats?.measuredAt;
+      return !at || Number.isNaN(Date.parse(String(at))) || Date.now() - Date.parse(String(at)) > SHOWCASE_MEASURE_MIN_HOURS * 3600_000;
+    });
+  const measured = await Promise.allSettled(repos.map(({ repo }) => fetchRepoStats(repo)));
+  for (let i = 0; i < repos.length; i += 1) {
+    const got = measured[i];
+    if (got?.status !== "fulfilled" || !got.value) continue;
+    const old = repos[i]!.row.showcase_stats;
+    await sql`UPDATE articles SET showcase_stats = ${sql.json({
+      stars: got.value.stars,
+      starsFirst: typeof old?.starsFirst === "number" ? old.starsFirst : got.value.stars,
+      firstAt: typeof old?.firstAt === "string" ? old.firstAt : new Date().toISOString(),
+      forks: got.value.forks,
+      language: got.value.language,
+      measuredAt: new Date().toISOString(),
+    } as never)} WHERE id = ${repos[i]!.row.id}`;
+  }
+}
 
 /**
  * Where an account's posts are known to be read up to. A quiet account's newest post can be months

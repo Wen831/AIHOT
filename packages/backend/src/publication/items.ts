@@ -1,7 +1,7 @@
 // Public read layer, item level. Every exit (site API, v1, RSS, MCP, sitemap) reads
 // items through these columns and views; which rows are public is decided by scope.ts.
 import type { CategoryKey, ChannelKey } from "@aihot/contracts/taxonomy";
-import type { FeedItemSummary, ItemSummary, MediaView, XPostView } from "@aihot/contracts/site";
+import type { FeedItemSummary, ItemSummary, MediaView, ShowcaseStats, XPostView } from "@aihot/contracts/site";
 import { sql, type Db } from "../db.ts";
 import { proxiedImage, proxiedImageSet } from "../media/imgproxy.ts";
 import { displayTags, publicSourceName } from "./rules.ts";
@@ -39,6 +39,8 @@ export interface ItemRow {
   zh_text: string | null;
   /** Chinese translation of the post an X post quotes. */
   quoted_zh: string | null;
+  /** Measured GitHub repo state of a showcase item (sources/github.ts), as stored. */
+  showcase_stats: Record<string, any> | null;
 }
 
 /** Columns every item listing selects. Internal judgement details never leave this layer. */
@@ -46,7 +48,7 @@ export const ITEM_COLUMNS = sql`
   p.article_id AS id, p.title, p.original_title, p.summary, p.reason, p.category, p.tags, p.score,
   p.selected, p.seat, p.channel, p.url, p.published_at, p.discovered_at, p.timeline_at, p.visibility,
   p.body_mode, p.indexable, p.fact_id, s.name AS source_name, s.participation_mode AS source_mode,
-  a.x_post, a.author, a.language,
+  a.x_post, a.author, a.language, a.showcase_stats,
   st.public_id::text AS story_public_id, st.title AS story_title,
   CASE WHEN p.channel = 'x' THEN tr.body_text END AS zh_text, qt.text_zh AS quoted_zh`;
 
@@ -128,6 +130,22 @@ export function xView(row: Pick<ItemRow, "x_post" | "zh_text"> & Partial<Pick<It
   };
 }
 
+/** A showcase item's measured GitHub state, as the reader sees it; null while never measured. */
+export function showcaseView(row: Pick<ItemRow, "showcase_stats">): ShowcaseStats | null {
+  const s = row.showcase_stats;
+  if (!s || typeof s.stars !== "number") return null;
+  const iso = (v: unknown, fallback: string) => (typeof v === "string" && !Number.isNaN(Date.parse(v)) ? v : fallback);
+  const now = new Date().toISOString();
+  return {
+    stars: s.stars,
+    starsFirst: typeof s.starsFirst === "number" ? s.starsFirst : s.stars,
+    forks: typeof s.forks === "number" ? s.forks : null,
+    language: typeof s.language === "string" ? s.language : null,
+    firstAt: iso(s.firstAt, now),
+    measuredAt: iso(s.measuredAt, now),
+  };
+}
+
 /** The shared public article; its X post is added as each answer shows it. */
 export function toItemSummary(row: ItemRow): ItemSummary {
   return {
@@ -147,6 +165,7 @@ export function toItemSummary(row: ItemRow): ItemSummary {
     selected: row.selected,
     channel: row.channel,
     story: row.story_public_id ? { publicId: row.story_public_id, title: row.story_title ?? "" } : null,
+    showcase: showcaseView(row),
   };
 }
 
@@ -159,6 +178,7 @@ export function toFeedItemSummary(row: ItemRow): FeedItemSummary {
     id: item.id, title: item.title, summary: item.summary, reason: item.reason,
     source: item.source, publishedAt: item.publishedAt, timelineAt: item.timelineAt,
     category: item.category, tags: item.tags, score: item.score, selected: item.selected, channel: item.channel,
+    showcase: item.showcase,
     x: x ? {
       authorName: x.authorName, handle: x.handle, avatarUrl: x.avatarUrl,
       ...(x.avatarSrcSet ? { avatarSrcSet: x.avatarSrcSet } : {}), media: x.media,

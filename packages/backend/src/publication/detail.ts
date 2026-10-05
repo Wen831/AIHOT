@@ -5,7 +5,7 @@ import { bodyToMarkdown } from "../content/markdown.ts";
 import { sql } from "../db.ts";
 import { proxyBodyImages } from "../media/imgproxy.ts";
 import { textToHtml } from "../content/sanitize.ts";
-import { exportTranslation, isChineseBody, ITEM_COLUMNS, ITEM_FROM, seatHolders, toItemSummary, xView, type ItemRow } from "./items.ts";
+import { exportTranslation, isChineseBody, ITEM_COLUMNS, ITEM_FROM, seatHolders, toItemSummary, showcaseView, xView, type ItemRow } from "./items.ts";
 import { listedCondition } from "./scope.ts";
 import { itemUrl } from "./links.ts";
 import { hasItemPage, publicSourceName } from "./rules.ts";
@@ -180,6 +180,8 @@ export async function exportMarkdown(id: string): Promise<{ filename: string; bo
   const lines: string[] = [];
   lines.push(`# ${row.title}`, "");
   if (row.original_title) lines.push(`> 原标题：${row.original_title}`, "");
+  const showcase = showcaseView(row);
+  if (showcase) lines.push(`- GitHub：⭐ ${showcase.stars}（Fork ${showcase.forks ?? "—"}${showcase.language ? ` · ${showcase.language}` : ""}）`);
   lines.push(`- 来源：${publicSourceName(row.source_name)}`);
   lines.push(`- 发布时间：${(row.published_at ?? row.discovered_at).toISOString()}`);
   lines.push(`- ${SITE.name}：${itemUrl(row.id)}`);
