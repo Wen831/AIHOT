@@ -6,7 +6,7 @@ export interface SourceRow {
   kind: "rss" | "web_list" | "json_list" | "x_search" | "mp_account" | "external";
   config: Record<string, any>;
   tier: string;
-  participation_mode: "editorial" | "hot_signal" | "isolated";
+  participation_mode: "editorial" | "hot_signal" | "isolated" | "showcase";
   first_party: boolean;
   interval_minutes: number;
   enabled: boolean;

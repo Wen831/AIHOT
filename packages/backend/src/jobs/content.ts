@@ -8,6 +8,7 @@ import type { PgBoss } from "pg-boss";
 import { sql, type Db } from "../db.ts";
 import { extractArticleBody, pageFetchable } from "../content/extract.ts";
 import { analyzeArticle, AnalysisInterruptedError } from "../editorial/analyze.ts";
+import { analyzeShowcaseArticle } from "../editorial/showcase.ts";
 import { isHistorical } from "../content/materials.ts";
 import { publishArticle } from "../publication/publish.ts";
 import { BudgetExceededError, ProviderRejectedError, ReceiptBusyError, ReceiptUnknownError } from "../providers/receipts.ts";
@@ -27,7 +28,7 @@ type Step = "extract" | "analyze";
 
 interface Route {
   step: Step;
-  /** Not an editorial source: no analysis; the post goes straight to event grouping as discussion evidence. */
+  /** Neither editorial nor showcase: no analysis; the post goes straight to event grouping as discussion evidence. */
   signal: boolean;
   historical: boolean;
 }
@@ -45,10 +46,11 @@ async function route(articleId: string, db: Db): Promise<Route | null> {
     FROM articles a JOIN sources s ON s.id = a.source_id WHERE a.id = ${articleId}`;
   if (!row) return null;
   const historical = isHistorical(row);
-  const signal = row.participation_mode !== "editorial";
+  const signal = row.participation_mode !== "editorial" && row.participation_mode !== "showcase";
   const pending = row.body_status === "pending";
   const wantsBody = row.config.fetchPublicContent === true || !!row.config.detail || row.kind === "web_list";
-  const needsPage = !signal && (wantsBody || (row.bare && pageFetchable(row.url, row.kind)));
+  // A showcase item's body is the feed's own; its GitHub pages are never fetched for more.
+  const needsPage = row.participation_mode !== "showcase" && !signal && (wantsBody || (row.bare && pageFetchable(row.url, row.kind)));
   const needsXArticle = row.kind === "x_search" && (!signal || (row.participation_mode === "hot_signal" && !historical));
   return { step: pending && (needsPage || needsXArticle) ? "extract" : "analyze", signal, historical };
 }
@@ -121,6 +123,16 @@ export async function processArticle(articleId: string, opts: { attemptTag?: str
 }
 
 async function processRevision(articleId: string, row: NonNullable<Awaited<ReturnType<typeof processingInput>>>, opts: { attemptTag?: string }): Promise<{ state: string }> {
+  if (row.participation_mode === "showcase") {
+    // The showcase item is written, not judged; it is published but never grouped.
+    const result = await analyzeShowcaseArticle(articleId, opts);
+    if (!result) return { state: "missing" };
+    if (result.stale) return { state: "stale" };
+    await publishArticle(articleId);
+    await sql`UPDATE articles SET processing_attempts = 0, processing_retry_at = NULL, processing_queued_at = NULL
+              WHERE id = ${articleId} AND revision = ${row.revision}`;
+    return { state: result.output?.relevance ?? "unknown" };
+  }
   if (row.participation_mode !== "editorial") {
     // Normally queued straight for grouping (queueProcessing); an explicit re-evaluation lands here.
     const { group } = await settleNonEditorial(articleId);

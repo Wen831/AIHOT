@@ -106,10 +106,10 @@ export function behindSources(clocks: SourceClock[], at: number, grace: boolean)
 
 /**
  * The heat evidence as it stands now, for every reader of story_signals: a report withdrawn since no
- * longer counts, a source counts in its current role (editorial or signal) and an isolated one not at
- * all, and a participant is the independent actor behind a post: an operator's media matrix (signal
- * group), a company's own channels (owner), else the source itself. Admin changes to roles, groups and
- * owners therefore reach the heat at once, without rewriting stored signals.
+ * longer counts, a source counts in its current role (editorial or signal), an isolated or showcase
+ * one not at all, and a participant is the independent actor behind a post: an operator's media
+ * matrix (signal group), a company's own channels (owner), else the source itself. Admin changes to
+ * roles, groups and owners therefore reach the heat at once, without rewriting stored signals.
  */
 export const currentSignals = () => sql`(
   SELECT ss.story_id, ss.article_id, s.id AS source_id, ss.observed_at, s.created_at AS source_since,
@@ -121,7 +121,7 @@ export const currentSignals = () => sql`(
     END AS participant_key
   FROM story_signals ss JOIN articles a ON a.id = ss.article_id JOIN sources s ON s.id = a.source_id
   LEFT JOIN publications p ON p.article_id = ss.article_id
-  WHERE s.participation_mode <> 'isolated' AND coalesce(p.visibility, 'public') <> 'withdrawn'
+  WHERE s.participation_mode NOT IN ('isolated', 'showcase') AND coalesce(p.visibility, 'public') <> 'withdrawn'
     AND NOT EXISTS (SELECT 1 FROM grouping_overrides go WHERE go.article_id = ss.article_id AND go.mode = 'standalone')
     AND (s.participation_mode <> 'editorial' OR EXISTS (SELECT 1 FROM fact_articles fa JOIN facts f ON f.id = fa.fact_id
       WHERE fa.article_id = ss.article_id AND f.story_id = ss.story_id AND ${evidenceCondition()}))

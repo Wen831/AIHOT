@@ -6,4 +6,6 @@ export const FEATURES = {
   leaderboard: false,
   /** Codex 重置监控：盯 OpenAI Codex 负责人在 X 上的额度重置公告（/codex-reset）。需要 SocialData。 */
   codexResetMonitor: false,
+  /** GitHub 每日热门项目 showcase：每天扫一次 trending，≤10 个项目中文详细介绍（/all?category=github）。 */
+  githubShowcase: true,
 } as const;

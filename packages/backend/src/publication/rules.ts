@@ -15,23 +15,25 @@ export function channelOf(sourceKind: string, hasXPost: boolean): "x" | "news" {
   return sourceKind === "x_search" || hasXPost ? "x" : "news";
 }
 
-/** Public pool (/all): editorial sources, AI relevant, with a Chinese title and summary. */
+/** Public pool (/all): editorial sources AI-relevant, showcase items written, with a Chinese title and summary. */
 export function isPoolEligible(input: {
   participationMode: string;
   relevance: string | null;
   title: string | null;
   summary: string | null;
 }): boolean {
+  // A showcase item is written, not judged: its own Chinese copy is the eligibility, there is no relevance.
+  if (input.participationMode === "showcase") return !!input.title && !!input.summary;
   return input.participationMode === "editorial" && input.relevance === "pass" && !!input.title && !!input.summary;
 }
 
 /**
- * Item detail page (and its Markdown export): every unwithdrawn item from an editorial source has one,
- * with or without a Chinese summary (noindex unless indexable). hot_signal material is heat evidence
- * only and has none. A paused source keeps its pages.
+ * Item detail page (and its Markdown export): every unwithdrawn item from an editorial or showcase source
+ * has one, with or without a Chinese summary (noindex unless indexable). hot_signal material is heat
+ * evidence only and has none. A paused source keeps its pages.
  */
 export function hasItemPage(p: { visibility: string; sourceMode: string }): boolean {
-  return p.visibility !== "withdrawn" && p.sourceMode === "editorial";
+  return p.visibility !== "withdrawn" && (p.sourceMode === "editorial" || p.sourceMode === "showcase");
 }
 
 /** Selected: pool eligible, judged selected, and the source tier may enter the selection. */

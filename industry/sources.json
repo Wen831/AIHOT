@@ -238,6 +238,27 @@
       ],
       "site_fulltext": false,
       "syndicate_fulltext": false
+    },
+    {
+      "id": "rss-github-trending",
+      "name": "GitHub Trending",
+      "kind": "rss",
+      "config": {
+        "feedUrl": "https://mshibanami.github.io/GitHubTrendingRSS/daily/all.xml",
+        "summaryIsBody": true,
+        "_aihot": {
+          "maxItemsPerRound": 10
+        }
+      },
+      "tier": "EXCLUDE_MP",
+      "first_party": false,
+      "participation_mode": "showcase",
+      "interval_minutes": 1440,
+      "tags": [
+        "开源项目"
+      ],
+      "site_fulltext": false,
+      "syndicate_fulltext": false
     }
   ]
 }

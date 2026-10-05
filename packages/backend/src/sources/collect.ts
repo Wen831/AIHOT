@@ -57,6 +57,13 @@ async function storedTitles(identities: string[]): Promise<Map<string, string>> 
 }
 
 const DAY_MS = 86_400_000;
+/** Showcase ranking/reading: CJK share over this counts an item as a Chinese project; README characters the writer sees. */
+const SHOWCASE_BODY_CHARS = 6000;
+const chineseShare = (text: string): number => {
+  const chars = text.replace(/\s/g, "");
+  if (!chars.length) return 0;
+  return (chars.match(/[\u4e00-\u9fff]/g)?.length ?? 0) / chars.length;
+};
 /** A listing title that is no headline: a label that swallowed its summary, or a call to action. */
 const needsTitle = (title: string) => title.length > 100 || /^(read more|learn more|continue reading|more|阅读全文|阅读更多|查看详情|了解更多)$/i.test(title.trim());
 
@@ -174,6 +181,24 @@ export async function collectSource(sourceId: string, opts: { force?: boolean } 
     if (maxAgeDays > 0) {
       const cutoff = Date.now() - maxAgeDays * 86400000;
       candidates = candidates.filter((c) => !c.publishedAt || !Number.isFinite(c.publishedAt.getTime()) || c.publishedAt.getTime() >= cutoff);
+    }
+    // Showcase sources (a display-only feed such as the daily GitHub trending): the feed order is the
+    // ranking, a repo stored earlier yields its slot to a new one, Chinese projects get a small bonus,
+    // and only the top entries reach storage. The rendered README bodies are truncated here, before
+    // storage: full ones would sit in the pool unread and burn writing tokens.
+    if (source.participation_mode === "showcase") {
+      const cap = Number(source.config._aihot?.maxItemsPerRound ?? 10);
+      const keys = candidates.map((c) => c.identityKey!).filter(Boolean);
+      const storedKeys = keys.length
+        ? new Set((await sql<{ identity_key: string }[]>`SELECT identity_key FROM articles WHERE source_id = ${sourceId} AND identity_key = ANY(${keys}::text[])`).map((r) => r.identity_key))
+        : new Set<string>();
+      candidates = candidates
+        .filter((c) => !storedKeys.has(c.identityKey!))
+        .map((c, index) => ({ c, score: -index + (chineseShare(`${c.title}\n${c.excerpt ?? ""}\n${c.bodyText ?? ""}`) > 0.3 ? 2 : 0) }))
+        .sort((x, y) => y.score - x.score)
+        .map(({ c }) => c)
+        .slice(0, cap)
+        .map((c) => ({ ...c, bodyHtml: null, bodyText: c.bodyText?.slice(0, SHOWCASE_BODY_CHARS) ?? c.bodyText, excerpt: c.excerpt?.slice(0, SHOWCASE_BODY_CHARS) ?? c.excerpt }));
     }
     // Process all candidates already returned before advancing the success cursor.
 
@@ -355,13 +380,14 @@ const shardMinutes = (mode: string) => X_SHARD_MINUTES[mode] ?? 60;
 
 /**
  * Daily: adapt each source's interval to its recent output (active 15 min … quiet 120 min).
- * hot_signal sources are allowed to be slower.
+ * hot_signal sources are allowed to be slower; showcase sources keep their own configured daily
+ * rhythm (their feed updates once a day, their volume says nothing about when to read it).
  */
 export async function adaptIntervals(): Promise<{ updated: number }> {
   const rows = await sql<Array<Pick<SourceRow, "id" | "participation_mode" | "kind" | "config" | "cursor"> & { paid_listing: boolean; per_day: number }>>`
     SELECT s.id, s.participation_mode, s.kind, s.config, s.cursor, coalesce(s.config->>'url', '') LIKE 'https://r.jina.ai/%' AS paid_listing,
       (SELECT count(*) FROM articles a WHERE a.source_id = s.id AND a.discovered_at > now() - interval '7 days' AND NOT a.backfill) / 7.0 AS per_day
-    FROM sources s WHERE s.enabled AND s.kind IN ('rss', 'web_list', 'json_list', 'x_search')`;
+    FROM sources s WHERE s.enabled AND s.kind IN ('rss', 'web_list', 'json_list', 'x_search') AND s.participation_mode <> 'showcase'`;
   let updated = 0;
   for (const r of rows) {
     const perDay = Number(r.per_day);
