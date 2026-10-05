@@ -95,6 +95,23 @@ test("backup failures still escalate after fifty hours without a success", async
   }
 });
 
+// The leaderboard fetch state is only refreshed while the feature runs. With the feature off
+// (the repo default), a leftover failed source — say from a run before the switch — must stay
+// silent instead of alerting every day about a pipeline that no longer exists.
+test("a switched-off leaderboard stays silent about its leftover fetch state", async () => {
+  const now = Date.now();
+  await sql`INSERT INTO settings (key, value) VALUES ('leaderboard.fetch', ${sql.json({
+    at: new Date(now).toISOString(),
+    sources: { "terminal-bench-4": { ok: false, at: new Date(now).toISOString(), lastOkAt: new Date(now - 3 * 24 * 3600_000).toISOString(), error: "fetch failed" } },
+  })}) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`;
+  try {
+    const keys = (await collectFindings(now)).map((f) => f.key).filter((k) => k.startsWith("leaderboard."));
+    assert.deepEqual(keys, [], "no leaderboard findings while the feature is off");
+  } finally {
+    await sql`DELETE FROM settings WHERE key = 'leaderboard.fetch'`;
+  }
+});
+
 // Failure cases: scoring succeeded but identity work failed outside processing_state; a short normal
 // wait creates noise; withdrawn/rejected/completed items stay counted; unknown paid work is called
 // harmless or automatically recoverable after its one automatic release has already been used;

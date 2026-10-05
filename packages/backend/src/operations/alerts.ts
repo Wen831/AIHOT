@@ -8,6 +8,7 @@ import { beijingDate, beijingTime } from "@aihot/contracts/time";
 import { sql } from "../db.ts";
 import { beijingDay, beijingStamp, duration, formatAlert, formatRecovery, sendAlert, type Finding, type Level } from "../notify/feishu.ts";
 import { backupConfigured } from "./backup.ts";
+import { FEATURES } from "@aihot/industry/features";
 import { unmarkedBoardModels } from "../leaderboard/read.ts";
 import { awaitingReviewCondition } from "../monitor/read.ts";
 import { GROUPING_WARN_AFTER_MS, waitingSelectedNews } from "./grouping.ts";
@@ -206,26 +207,30 @@ export async function collectFindings(now = Date.now()): Promise<Finding[]> {
     }
   }
 
-  // A leaderboard source keeps its last snapshot while failing.
-  const [lb] = await sql<{ value: { sources?: Record<string, { ok: boolean; lastOkAt: string | null; error?: string }> } }[]>`SELECT value FROM settings WHERE key = 'leaderboard.fetch'`;
-  const stale = Object.entries(lb?.value.sources ?? {}).filter(([, s]) => !s.ok && s.lastOkAt && now - Date.parse(s.lastOkAt) > 26 * 3600_000);
-  if (stale.length) {
-    out.push({
-      key: "leaderboard.fetch",
-      level: "digest",
-      title: `模型榜有 ${stale.length} 个评测来源超过一天没抓到，榜单暂用上一份数据`,
-      detail: stale.slice(0, 6).map(([k, s]) => `${k}：${s.error ?? "失败"}（上次成功 ${beijingStamp(s.lastOkAt!)}）`).join("；"),
-    });
-  }
+  // The leaderboard checks read state that only its fetch jobs refresh. With the feature off
+  // nothing refreshes it, so a leftover failure would alert forever — both checks stay silent.
+  if (FEATURES.leaderboard) {
+    // A leaderboard source keeps its last snapshot while failing.
+    const [lb] = await sql<{ value: { sources?: Record<string, { ok: boolean; lastOkAt: string | null; error?: string }> } }[]>`SELECT value FROM settings WHERE key = 'leaderboard.fetch'`;
+    const stale = Object.entries(lb?.value.sources ?? {}).filter(([, s]) => !s.ok && s.lastOkAt && now - Date.parse(s.lastOkAt) > 26 * 3600_000);
+    if (stale.length) {
+      out.push({
+        key: "leaderboard.fetch",
+        level: "digest",
+        title: `模型榜有 ${stale.length} 个评测来源超过一天没抓到，榜单暂用上一份数据`,
+        detail: stale.slice(0, 6).map(([k, s]) => `${k}：${s.error ?? "失败"}（上次成功 ${beijingStamp(s.lastOkAt!)}）`).join("；"),
+      });
+    }
 
-  const unmarked = await unmarkedBoardModels().catch(() => [] as string[]);
-  if (unmarked.length) {
-    out.push({
-      key: "leaderboard.marks",
-      level: "digest",
-      title: `模型榜有 ${unmarked.length} 个模型没有厂商标志，暂时显示首字母`,
-      detail: `${unmarked.slice(0, 8).join("、")}；标志文件放 assets/model-providers，映射在 packages/backend/src/leaderboard/registry.ts`,
-    });
+    const unmarked = await unmarkedBoardModels().catch(() => [] as string[]);
+    if (unmarked.length) {
+      out.push({
+        key: "leaderboard.marks",
+        level: "digest",
+        title: `模型榜有 ${unmarked.length} 个模型没有厂商标志，暂时显示首字母`,
+        detail: `${unmarked.slice(0, 8).join("、")}；标志文件放 assets/model-providers，映射在 packages/backend/src/leaderboard/registry.ts`,
+      });
+    }
   }
   return out;
 }
