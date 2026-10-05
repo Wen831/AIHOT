@@ -121,8 +121,14 @@ export function cosine32(a: Float32Array, b: Float32Array): number {
   return na && nb ? dot / Math.sqrt(na * nb) : 0;
 }
 
-/** The lexical fallback's bar: shared bigrams are not on the cosine scale, so it has its own. */
-const LEXICAL_MIN = 0.25;
+/**
+ * The lexical fallback's bar: shared bigrams are not on the cosine scale, so it has its own. Calibrated
+ * on the 2026-10-05 replay of a merged match fact (20 reports of one game): cross-topic pairs of the
+ * same occurrence (a post-match interview vs the result report) score 0.12-0.25 while unrelated
+ * reports stay at or below 0.115 (top of 60), and the judging layer, not the recall, decides what
+ * merges — so recall stays generous and misses nothing it can still catch.
+ */
+const LEXICAL_MIN = 0.12;
 
 /** Both identity candidates and reading context use the same stored vectors (or the lexical fallback). */
 async function similarReports(queryId: string, queryText: string, pool: Array<{ article_id: string; revision?: number }>, minScore: number): Promise<Map<string, number>> {
