@@ -135,6 +135,15 @@ interface FeishuUser {
   name?: string;
 }
 
+/** JSON decoding errors may quote response bytes, which are private authentication data. */
+async function feishuJson<T>(response: Response, step: "token" | "profile"): Promise<T> {
+  try {
+    return await response.json() as T;
+  } catch {
+    throw new Error(`Feishu ${step} response is not valid JSON (HTTP ${response.status})`);
+  }
+}
+
 async function feishuUser(code: string): Promise<{ user: FeishuUser; appId: string }> {
   const appId = credential("integrations", "FEISHU_LOGIN_APP_ID");
   const appSecret = credential("integrations", "FEISHU_LOGIN_APP_SECRET");
@@ -145,13 +154,13 @@ async function feishuUser(code: string): Promise<{ user: FeishuUser; appId: stri
     body: new URLSearchParams({ grant_type: "authorization_code", client_id: appId, client_secret: appSecret, code, redirect_uri: CALLBACK_URL }),
     signal: AbortSignal.timeout(15_000),
   });
-  const token = (await tokenRes.json()) as { access_token?: string; error?: string };
-  if (!token.access_token) throw new Error(`Feishu token exchange failed: ${token.error ?? tokenRes.status}`);
+  const token = await feishuJson<{ access_token?: string }>(tokenRes, "token");
+  if (!token.access_token) throw new Error(`Feishu token exchange failed (HTTP ${tokenRes.status})`);
   const userRes = await fetch("https://passport.feishu.cn/suite/passport/oauth/userinfo", {
     headers: { authorization: `Bearer ${token.access_token}` },
     signal: AbortSignal.timeout(15_000),
   });
-  return { user: (await userRes.json()) as FeishuUser, appId };
+  return { user: await feishuJson<FeishuUser>(userRes, "profile"), appId };
 }
 
 export class LoginRejected extends Error {}
@@ -170,14 +179,12 @@ export async function completeLogin(code: string, state: string, stateCookie: st
   const given = unsign(state);
   if (!expected || !given || expected !== given) throw new LoginRejected("登录状态已失效，请重新登录");
   const returnTo = given.split("|")[1] ?? "/admin";
-  // Pin the key and app this sign-in used: a configuration change during the exchange must not rebind it.
-  const loginKey = secret();
   const { user: u, appId } = await feishuUser(code);
   const emailClaim = u.enterprise_email ?? u.email;
   const email = typeof emailClaim === "string" ? emailClaim.toLowerCase() || null : null;
   const unionId = typeof u.union_id === "string" ? u.union_id || null : null;
   const claims: FeishuClaims = { appId, unionId, email };
-  const auth: SessionAuth = { method: "feishu", claims, binding: sessionBinding("feishu", claims, loginKey) };
+  const auth: SessionAuth = { method: "feishu", claims, binding: sessionBinding("feishu", claims, secret()) };
   const allowed = (unionId && config.adminUnionIds.includes(unionId)) || (email && config.adminEmails.includes(email));
   if (!allowed) throw new LoginRejected("这个飞书账号没有后台权限");
   const [existing] = await sql<{ id: number }[]>`

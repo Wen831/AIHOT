@@ -1,6 +1,6 @@
 // Paid requests: an answer already received is reused, every request actually sent counts against the
-// budget (retries of one logical request included), a lost answer is bought again at most once, and the
-// valve stops calls before they are sent.
+// budget (retries of one logical request included), a lost answer is bought again at most once, an
+// answer cut off at the output limit says so, and the valve stops calls before they are sent.
 import { gate, stub, tag } from "./setup.ts";
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
@@ -114,6 +114,24 @@ test("a fully received non-object model response is unusable output, not an unkn
   } finally {
     process.env.DEEPSEEK_BASE_URL = original;
     await malformed.close();
+  }
+});
+
+test("an answer cut off at the output limit is a failed paid answer that says so", async () => {
+  const cut = await stub(() => ({ id: "stub-cut", choices: [{ message: { content: "" }, finish_reason: "length" }], usage }));
+  const original = process.env.DEEPSEEK_BASE_URL;
+  const subject = `length-${tag()}`;
+  process.env.DEEPSEEK_BASE_URL = `${cut.url}/v1`;
+  try {
+    await assert.rejects(
+      chatJson({ model: "deepseek-flash-think", purpose: "invariant_test", subject, promptVersion: "t1", system: "s", user: `input ${subject}`, schema: z.object({ ok: z.boolean() }) }),
+      (error: unknown) => error instanceof ModelOutputError && /finish_reason=length/.test(error.message));
+    const [r] = await sql`SELECT status, error FROM receipts WHERE subject=${subject}`;
+    assert.equal(r!.status, "failed");
+    assert.match(r!.error, /finish_reason=length/);
+  } finally {
+    process.env.DEEPSEEK_BASE_URL = original;
+    await cut.close();
   }
 });
 

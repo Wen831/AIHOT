@@ -1,8 +1,10 @@
-import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useMemo, useRef, useState, type ReactNode } from "react";
+import { IntentLink } from "../components/ui/IntentLink";
 import { Link, useLoaderData } from "react-router";
 import type { SiteContact, SiteStats } from "@aihot/contracts/site";
-import { ABOUT, SITE, subjectAfter } from "@aihot/industry/site";
-import { apiGet, edgeTtl } from "../lib/api.server";
+import { ABOUT, POLICY, REPORTS, SITE, subjectAfter } from "@aihot/site";
+import { apiGet, cachedPage } from "../lib/api.server";
+import { pageReuse } from "../lib/page-reuse";
 import { organizationLd, pageMeta } from "../lib/seo";
 import { Kicker } from "../components/ui/Kicker";
 import { buttonClass } from "../components/ui/Controls";
@@ -12,21 +14,19 @@ import { PhoneBar } from "../components/shell/PhoneBar";
 import type { Screen } from "../components/shell/screens";
 
 export const handle: Screen = { tab: "me", name: "关于" };
-
-export function headers() {
-  return edgeTtl(300);
-}
+export { pageHeaders as headers } from "../lib/api.server";
+export const { clientLoader, shouldRevalidate } = pageReuse<typeof loader>();
 
 export async function loader({ request }: { request: Request }) {
   const [contact, stats] = await Promise.all([
     apiGet<SiteContact>("/api/site/contact", { signal: request.signal }).catch(() => null),
     apiGet<SiteStats>("/api/site/stats", { signal: request.signal }).catch(() => null),
   ]);
-  return { contact, stats };
+  return cachedPage(300, { contact, stats });
 }
 
 export function meta() {
-  return pageMeta({ title: "关于", description: `关于 ${SITE.name}：${SITE.description}`, path: "/about", image: "/og/pages/about.png", jsonLd: organizationLd() });
+  return pageMeta({ title: "关于", description: ABOUT.description, path: "/about", image: "/og/pages/about.png", jsonLd: organizationLd() });
 }
 
 const NO_SOURCES: RiverSource[] = [];
@@ -96,14 +96,14 @@ function stagesOf(stats: SiteStats | null): Stage[] {
     {
       no: "03",
       title: "精选",
-      figure: stats && <Figure n={stats.selected} unit="条精选" />,
+      figure: stats && <Figure n={stats.selected} unit={REPORTS.metricUnits.selectedCount} />,
       text: ABOUT.steps.select,
       note: stats && <>过去 24 小时 {stats.day.selected} 条进了精选</>,
     },
     {
       no: "04",
       title: "成刊",
-      figure: stats && <Figure n={stats.dailies} unit="期日报" />,
+      figure: stats && <Figure n={stats.dailies} unit={REPORTS.metricUnits.reportsCovered} />,
       text: ABOUT.steps.publish,
       note: "也可以用 RSS、API、MCP 订阅",
     },
@@ -136,8 +136,8 @@ function QrCard({ src, kind, title, note }: { src: string; kind: string; title: 
  */
 function Maker({ maker, contact }: { maker: NonNullable<typeof ABOUT.maker>; contact: SiteContact | null }) {
   const codes = [
-    contact?.wechatQr && maker.wechat ? <QrCard key="wechat" src={contact.wechatQr} kind="微信公众号" title={maker.wechat.title} note={maker.wechat.note} /> : null,
-    contact?.feishuQr && maker.feishu ? <QrCard key="feishu" src={contact.feishuQr} kind="飞书群" title={maker.feishu.title} note={maker.feishu.note} /> : null,
+    contact?.wechatQr && maker.wechat ? <QrCard key="wechat" src={contact.wechatQr} kind={maker.wechat.kind} title={maker.wechat.title} note={maker.wechat.note} /> : null,
+    contact?.feishuQr && maker.feishu ? <QrCard key="feishu" src={contact.feishuQr} kind={maker.feishu.kind} title={maker.feishu.title} note={maker.feishu.note} /> : null,
   ].filter(Boolean);
   return (
     <section aria-labelledby="maker" className="mt-20 grid gap-10 xl:mt-28 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:gap-16">
@@ -180,13 +180,13 @@ function Maker({ maker, contact }: { maker: NonNullable<typeof ABOUT.maker>; con
 function Latest({ item, className = "" }: { item: SiteStats["latest"][number] | undefined; className?: string }) {
   if (!item) return null;
   return (
-    <Link viewTransition to={`/items/${item.id}`} prefetch="intent" className={`group block ${className}`}>
+    <IntentLink viewTransition to={`/items/${item.id}`} className={`group block ${className}`}>
       <span className="text-[11px] font-semibold tracking-[0.2em] text-accent">最近精选</span>
       <span key={item.id} className="animate-fade-up mt-1.5 block">
         <span className="line-clamp-2 text-[13.5px] font-semibold leading-[1.55] text-ink transition-colors group-hover:text-accent">{item.title}</span>
         <span className="mt-1 block truncate text-[12px] text-ink-4">{item.source}</span>
       </span>
-    </Link>
+    </IntentLink>
   );
 }
 
@@ -219,31 +219,31 @@ export default function AboutPage() {
           </h1>
           <p className="mt-5 max-w-[36em] text-[15.5px] leading-[1.85] text-ink-3 xl:text-[17px]">
             {ABOUT.lead.split("{sources}").map((part, i) => (
-              <span key={i}>
-                {i > 0 && (stats ? <span className="num font-semibold text-ink">{stats.sources}</span> : "上百")}
+              <Fragment key={i}>
+                {i > 0 && (stats ? <>{" "}<span className="num font-semibold text-ink">{stats.sources}</span>{" "}</> : ABOUT.sourcesFallback)}
                 {part}
-              </span>
+              </Fragment>
             ))}
           </p>
         </div>
         <div className="flex flex-wrap gap-3 lg:pb-2">
-          <Link to="/" prefetch="intent" className={buttonClass("primary", "lg")}>
+          <IntentLink to="/" className={buttonClass("primary", "lg")}>
             看今天的精选 <IconArrowRight size={15} />
-          </Link>
-          <Link to="/daily" prefetch="intent" className={buttonClass("secondary", "lg")}>
+          </IntentLink>
+          <IntentLink to="/daily" className={buttonClass("secondary", "lg")}>
             读最新日报
-          </Link>
+          </IntentLink>
         </div>
       </header>
 
       <section aria-labelledby="how" className="mt-10 xl:mt-14">
         <h2 id="how" className="sr-only">
-          {SITE.name} 怎么工作
+          {`${SITE.name} 怎么工作`}
         </h2>
         <SignalRiver sources={sources} focus={focus} onArrive={onArrive} className="h-[230px] sm:h-[300px] lg:h-[360px] 2xl:h-[420px]">
           <Latest item={latest[at]} className="absolute left-[75%] top-[calc(42%+42px)] hidden w-[25%] px-6 lg:block" />
         </SignalRiver>
-        <p className="sr-only">示意图：每条线是一个信源；线汇成一束束，代表同一件事的多篇报道；经过精选的闸门，只有少数几束通过，{subjectAfter("汇入每天的", "日报")}。</p>
+        <p className="sr-only">{`示意图：每条线是一个信源；线汇成一束束，代表同一件事的多篇报道；经过精选的闸门，只有少数几束通过，${subjectAfter("汇入每天的", "日报")}。`}</p>
         <Latest item={latest[at]} className="mt-2 border-t border-line pt-4 lg:hidden" />
         <ol className="mt-4 grid grid-cols-1 border-t border-line-strong sm:grid-cols-2 lg:mt-0 lg:grid-cols-4">
           {stages.map((s, i) => (
@@ -271,18 +271,23 @@ export default function AboutPage() {
       {ABOUT.maker && <Maker maker={ABOUT.maker} contact={contact} />}
 
       <p className="mt-16 well rounded-card px-5 py-4 text-[13px] leading-[1.85] text-ink-3">
-        {ABOUT.copyright}
+        {ABOUT.copyright[0]}
         <Link viewTransition to="/feedback" className="text-accent hover:underline">
           反馈页
         </Link>
-        联系我们。
+        {ABOUT.copyright[1]}
       </p>
 
       <footer className="mt-8 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-5 text-[12.5px] text-ink-4">
         <span>{SITE.footerNote}</span>
         <nav className="flex gap-5" aria-label="规则与隐私">
-          <Link viewTransition to="/terms" className="transition-colors hover:text-accent">
-            使用规则
+          <Link
+            viewTransition
+            id={ABOUT.termsAnchor ?? undefined}
+            to="/terms"
+            className="transition-colors hover:text-accent"
+          >
+            {POLICY.terms.name}
           </Link>
           <Link viewTransition to="/privacy" className="transition-colors hover:text-accent">
             隐私说明

@@ -11,9 +11,97 @@ import { enqueue, QUEUES } from "../jobs/queue.ts";
 import { queueProcessing } from "../jobs/content.ts";
 import { identityKeyForUrl, normalizeUrl } from "../lib/url.ts";
 import { publishArticleTx, setSeoDecision } from "../publication/publish.ts";
+import { emit } from "../modules.ts";
 import { requestRegroup } from "../events/corrections.ts";
 import { computeHotRanking, storedHotRanking } from "../events/hot.ts";
 import { audit, auditHistory, Conflict } from "../audit.ts";
+import { sha256, stableJson } from "../lib/ids.ts";
+
+interface PublicationDateMaterial {
+  id: string;
+  identity_key: string;
+  source_id: string;
+  url: string;
+  revision: number;
+  content_hash: string | null;
+  published_at: Date | null;
+  published_at_claim: Date | null;
+  discovered_at: Date;
+  timeline_at: Date;
+  backfill: boolean;
+  backfill_reason: string | null;
+  updated_at: Date;
+}
+
+/** A reviewed historical date correction; independent discovery order and editorial state are retained. */
+export function publicationDateCorrectionPlan(article: PublicationDateMaterial, publishedAt: string, now = Date.now()) {
+  const date = new Date(publishedAt);
+  if (!Number.isFinite(date.getTime()) || date.toISOString() !== publishedAt) throw new Error("发布时间必须是完整、有效的 UTC ISO 日期");
+  if (date.getTime() > now) throw new Error("发布时间不能是未来日期");
+  const recent = now - 7 * 86400_000;
+  if (!article.published_at || article.published_at.getTime() >= recent || date.getTime() >= recent) throw new Error("这里只校正新旧日期均早于七天窗口的历史内容");
+  const before = { publishedAt: article.published_at.toISOString(), publishedAtClaim: article.published_at_claim?.toISOString() ?? null,
+    timelineAt: article.timeline_at.toISOString() };
+  const timelineFollowsPublication = before.timelineAt === before.publishedAt;
+  const after = { publishedAt, publishedAtClaim: publishedAt, timelineAt: timelineFollowsPublication ? publishedAt : before.timelineAt };
+  const hash = sha256(stableJson({ id: article.id, identity: article.identity_key, source: article.source_id, url: article.url,
+    version: article.revision, contentHash: article.content_hash, updatedAt: article.updated_at,
+    discoveredAt: article.discovered_at, backfill: article.backfill, backfillReason: article.backfill_reason, before, requested: publishedAt }));
+  return { articleId: article.id, version: article.revision, hash, before, after, timelineFollowsPublication,
+    changed: before.publishedAt !== publishedAt };
+}
+
+/** Read-only plan for the operator's evidence and exact version/hash approval. */
+export async function previewPublicationDateCorrection(id: string, publishedAt: string) {
+  const [article] = await sql<PublicationDateMaterial[]>`SELECT * FROM articles WHERE id=${id}`;
+  return article ? publicationDateCorrectionPlan(article, publishedAt) : null;
+}
+
+interface PublicationDateCorrectionResult {
+  articleId: string;
+  revision: number;
+  status: "corrected" | "unchanged";
+  publishedAt: string;
+}
+
+/** Corrects verified historical metadata without revising material, buying analysis or changing selection. */
+export async function correctPublicationDate(id: string, input: { version: number; hash: string; publishedAt: string; requestId: string; reason: string }, actor: string): Promise<PublicationDateCorrectionResult> {
+  z.object({ version: z.number().int().positive(), hash: z.string().regex(/^[0-9a-f]{64}$/), publishedAt: z.string(),
+    requestId: z.string().regex(/^[\w-]{8,80}$/), reason: z.string().trim().min(1) }).parse(input);
+  return sql.begin(async tx => {
+    const [article] = await tx<PublicationDateMaterial[]>`SELECT * FROM articles WHERE id=${id} FOR UPDATE`;
+    if (!article) throw new Conflict("内容不存在");
+    const [prior] = await tx<{ after: { publishedAt: string; result: PublicationDateCorrectionResult } }[]>`
+      SELECT after FROM audit_log WHERE subject=${`content:${id}`} AND action='content.correct-publication-date'
+        AND actor=${actor} AND request_id=${input.requestId} ORDER BY id LIMIT 1`;
+    if (prior) {
+      if (prior.after.publishedAt !== input.publishedAt) throw new Conflict("同一个请求不能批准不同的发布时间");
+      return prior.after.result;
+    }
+    const plan = publicationDateCorrectionPlan(article, input.publishedAt);
+    if (article.revision !== input.version || plan.hash !== input.hash) throw new Conflict("材料或日期已被修改，请重新核对日期校正预览");
+    if (!plan.changed) return { articleId: id, revision: article.revision, status: "unchanged", publishedAt: input.publishedAt };
+    // Everything except date/order and freshness metadata must be identical after projection.
+    const [previous] = await tx<{ decision: unknown }[]>`SELECT to_jsonb(p)-ARRAY['published_at','timeline_at','sort_at','revision','updated_at'] AS decision FROM publications p WHERE article_id=${id}`;
+    await tx`UPDATE articles SET published_at=${new Date(plan.after.publishedAt)},published_at_claim=${new Date(plan.after.publishedAtClaim)},
+      timeline_at=${new Date(plan.after.timelineAt)},updated_at=now() WHERE id=${id}`;
+    if (previous) {
+      await publishArticleTx(tx, id);
+      const [next] = await tx<{ decision: unknown }[]>`SELECT to_jsonb(p)-ARRAY['published_at','timeline_at','sort_at','revision','updated_at'] AS decision FROM publications p WHERE article_id=${id}`;
+      if (stableJson(previous.decision) !== stableJson(next?.decision)) {
+        const old = previous.decision as Record<string, unknown>;
+        const fresh = (next?.decision ?? {}) as Record<string, unknown>;
+        const changed = Object.keys(old).filter(key => stableJson(old[key]) !== stableJson(fresh[key]));
+        throw new Conflict(`公开决定已变化，日期校正不能改变选稿、范围、内容或归组：${changed.join("、")}`);
+      }
+    }
+    await emit("articleChanged", { id, kind: "content", reason: "verified historical publication date corrected" }, tx);
+    const result: PublicationDateCorrectionResult = { articleId: id, revision: article.revision, status: "corrected", publishedAt: input.publishedAt };
+    await audit(actor, "content.correct-publication-date", `content:${id}`, input.reason, plan.before,
+      { ...plan.after, result }, { db: tx, requestId: input.requestId });
+    return result;
+  });
+}
 
 export async function searchContent(q: string): Promise<BeforeJson<AdminContentRow>[]> {
   const term = q.trim();
@@ -99,6 +187,7 @@ export async function setVisibility(id: string, input: { visibility: "public" | 
     let hot = false;
     if (published?.reduced || (before.visibility ?? "public") !== input.visibility) {
       hot = await inHotRanking(id, tx);
+      await emit("articleChanged", { id, kind: "content", reduced: published?.reduced, reason: `visibility ${input.visibility}` }, tx);
       const stories = await tx<{ story_id: number }[]>`
         SELECT DISTINCT f.story_id FROM fact_articles fa JOIN facts f ON f.id = fa.fact_id WHERE fa.article_id = ${id} AND f.story_id IS NOT NULL`;
       for (const s of stories) await enqueue(QUEUES.digest, { storyId: s.story_id }, { singletonKey: `story:${s.story_id}` }, tx);
@@ -151,6 +240,7 @@ export async function overrideFields(id: string, input: { fields: unknown; clear
       ON CONFLICT (article_id) DO UPDATE SET fields = EXCLUDED.fields, reason = EXCLUDED.reason, version = editorial_overrides.version + 1, updated_by = EXCLUDED.updated_by, updated_at = now()`;
     const published = await publishArticleTx(tx, id);
     if (published?.changed) {
+      await emit("articleChanged", { id, kind: "content", reduced: published.reduced, reason: "manual correction" }, tx);
       const changedFields = new Set([...Object.keys(fields), ...(input.clear ?? [])]);
       if (changedFields.has("category") || changedFields.has("tags")) await correctReportClassification(tx, id, input.reason);
       const [st] = await tx<{ story_id: number | null }[]>`SELECT story_id FROM publications WHERE article_id = ${id}`;

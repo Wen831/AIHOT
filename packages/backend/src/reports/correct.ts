@@ -3,20 +3,23 @@
 import { RELEASE } from "@aihot/industry/taxonomy";
 import type { Tx } from "../db.ts";
 import { isRelease } from "../editorial/vocabulary.ts";
+import { emit } from "../modules.ts";
 import { SECTION_ORDER, sectionOf } from "./edition.ts";
 
 interface Entry { itemId: string; followUp?: string; firstParty?: boolean; role?: string; [key: string]: unknown }
 interface Group { label?: string; heading?: string; summary?: unknown; items?: Entry[]; storyRefs?: Entry[]; [key: string]: unknown }
 interface Content { sections?: Group[]; themes?: Group[]; metrics?: Record<string, number>; [key: string]: unknown }
 
-export async function correctReportClassification(tx: Tx, articleId: string, reason: string) {
+/** Moves the item to its new section in every issue that carries it; says whether any issue changed. */
+export async function correctReportClassification(tx: Tx, articleId: string, reason: string): Promise<boolean> {
   const [item] = await tx<{ category: string | null }[]>`SELECT category FROM publications WHERE article_id=${articleId}`;
-  if (!item?.category) return;
+  if (!item?.category) return false;
   const reports = await tx<{ id: number; kind: string; content: Content; revision: number; generated_at: Date }[]>`
     SELECT id,kind,content,revision,generated_at FROM reports
     WHERE content @> ${tx.json({ sections: [{ items: [{ itemId: articleId }] }] })}
        OR content @> ${tx.json({ themes: [{ storyRefs: [{ itemId: articleId }] }] })}
     ORDER BY id FOR UPDATE`;
+  let changed = false;
   for (const report of reports) {
     const content = structuredClone(report.content);
     const daily = report.kind === "daily";
@@ -54,5 +57,8 @@ export async function correctReportClassification(tx: Tx, articleId: string, rea
     await tx`INSERT INTO report_revisions (report_id,revision,content,generated_at,reason)
       VALUES (${report.id},${report.revision},${tx.json(report.content as never)},${report.generated_at},${`classification ${articleId}: ${reason}`})`;
     await tx`UPDATE reports SET content=${tx.json(content as never)},revision=revision+1,updated_at=now() WHERE id=${report.id}`;
+    changed = true;
   }
+  if (changed) await emit("reportsChanged", { reason: `report classification ${articleId}` }, tx);
+  return changed;
 }

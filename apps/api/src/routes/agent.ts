@@ -2,18 +2,20 @@
 // errors are the usual v1 Problem JSON. New abilities become new addresses listed in the guide, which
 // agents read without updating.
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { FEATURES } from "@aihot/industry/features";
 import { PUBLIC_API_CATEGORY_KEYS, type PublicApiCategoryKey } from "@aihot/contracts/taxonomy";
 import { isValidDate } from "@aihot/contracts/time";
-import { agentGuide, codexAnswer, dailyAnswer, hotAnswer, latestAnswer, periodAnswer, searchAnswer, searchItems, storyAnswer } from "@aihot/backend/publication/agent";
+import { agentGuide, dailyAnswer, hotAnswer, latestAnswer, periodAnswer, searchAnswer, searchItems, storyAnswer } from "@aihot/backend/publication/agent";
 import { v1Items } from "@aihot/backend/publication/v1";
 import { resolveStory, v1HotTopics, v1Story } from "@aihot/backend/publication/stories";
 import { dailyWithNotes, isPeriodKey, v1Period } from "@aihot/backend/publication/reports";
-import { codexResetPage } from "@aihot/backend/monitor/read";
+import { requestNotice, serverModules } from "@aihot/backend/modules";
 import { QueryError, sendProblem, sendTextWithEtag, strictQuery } from "../http/respond.ts";
 import { enumParam, intParam, publicHandler, V1_OPERATIONS } from "./v1.ts";
 
 function markdown(req: FastifyRequest, reply: FastifyReply, text: string, etagPrefix: string, cacheControl: string) {
+  // A module's reminder for the person behind the request closes the answer.
+  const note = requestNotice("agent", req);
+  if (note) text += note;
   return sendTextWithEtag(req, reply, text, { etagPrefix, cacheControl, contentType: "text/markdown; charset=utf-8" });
 }
 
@@ -29,7 +31,7 @@ export function registerAgent(app: FastifyInstance) {
   app.get("/api/v1/agent", publicHandler(async (req, reply) => {
     strictQuery(req, []);
     // Cached like /openapi-v1.json: agents learn a new ability within minutes of its release.
-    return markdown(req, reply, agentGuide(), "agent-guide", "public, max-age=300, stale-while-revalidate=3600");
+    return markdown(req, reply, agentGuide(), "agent-guide", "public, max-age=300, must-revalidate");
   }));
 
   app.get("/api/v1/agent/latest", publicHandler(async (req, reply) => {
@@ -100,11 +102,11 @@ export function registerAgent(app: FastifyInstance) {
       return markdown(req, reply, periodAnswer(body.report, p.kind, "http"), `agent-${p.kind}`, p.byKey);
     }));
   }
-
-  if (FEATURES.codexResetMonitor) {
-    app.get("/api/v1/agent/codex-resets", publicHandler(async (req, reply) => {
+  // The modules' abilities, each answered at its own address.
+  for (const ability of serverModules().flatMap((m) => m.agent?.abilities ?? [])) {
+    app.get(`/api/v1/agent${ability.path}`, publicHandler(async (req, reply) => {
       strictQuery(req, []);
-      return markdown(req, reply, codexAnswer(await codexResetPage()), "agent-codex", V1_OPERATIONS.codexResets.cacheControl);
+      return markdown(req, reply, await ability.answer(), ability.etagPrefix, ability.cacheControl);
     }));
   }
 }

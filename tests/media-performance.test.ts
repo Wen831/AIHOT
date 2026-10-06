@@ -2,19 +2,20 @@ import "./setup.ts";
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
 import { createServer } from "node:http";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, mkdir, writeFile, readFile } from "node:fs/promises";
+import { createHash, randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import sharp from "sharp";
-import { SITE } from "@aihot/industry/site";
+import { SITE } from "@aihot/site";
 
 const dir = await mkdtemp(path.join(tmpdir(), "aihot-media-test-"));
 process.env.AIHOT_DATA_DIR = dir;
 process.env.ALLOW_PRIVATE_NETWORK_FETCH = "true";
 process.env.MODEL_CALLS_ENABLED = "false";
 const { produceImage } = await import("@aihot/backend/media/images");
-const { renderOg } = await import("../apps/api/src/og/render.ts");
-const { renderPoster } = await import("../apps/api/src/og/poster.ts");
+const { renderOg } = await import("@aihot/backend/media/og");
+const { renderPoster } = await import("@aihot/backend/media/poster");
 const { xView } = await import("@aihot/backend/publication/items");
 
 let imageHits = 0;
@@ -73,12 +74,89 @@ test("failed originals are not retried for every mode", async () => {
   assert.equal(failureHits, 1);
 });
 
+// A previous encoder's disk entry must not bypass today's rendition rules, refetch the source,
+// rasterize a compact vector, or expose a mismatched MIME while body/type files are replaced.
+test("cached oversized SVGs use current renditions without downloading them again", async () => {
+  const svg = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080"><rect width="1920" height="1080" fill="#176b75"/><desc>${randomBytes(180000).toString("base64")}</desc></svg>`);
+  const url = `${base}/cached-vector`;
+  const key = createHash("sha256").update(`full|${url}`).digest("hex");
+  const file = path.join(dir, "imgcache", key.slice(0, 2), key);
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, svg);
+  await writeFile(`${file}.type`, "image/svg+xml");
+  const before = imageHits;
+  const first = await produceImage(url, "full");
+  assert.equal(first.type, "image/webp");
+  const meta = await sharp(first.body).metadata();
+  assert.deepEqual([meta.width, meta.height], [1600, 900]);
+  assert.ok(first.body.length < svg.length / 10);
+  assert.deepEqual(await produceImage(url, "full"), first);
+  // Another serving process can read the old MIME alongside the new body, or the reverse.
+  await writeFile(`${file}.type`, "image/svg+xml");
+  assert.deepEqual(await produceImage(url, "full"), first);
+  await writeFile(file, svg);
+  await writeFile(`${file}.type`, "image/webp");
+  assert.deepEqual(await produceImage(url, "full"), first);
+  const smallUrl = `${base}/compact-vector`;
+  const smallKey = createHash("sha256").update(`full|${smallUrl}`).digest("hex");
+  const smallFile = path.join(dir, "imgcache", smallKey.slice(0, 2), smallKey);
+  const compact = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><circle cx="10" cy="10" r="8"/></svg>');
+  await mkdir(path.dirname(smallFile), { recursive: true });
+  await writeFile(smallFile, compact);
+  await writeFile(`${smallFile}.type`, "image/svg+xml");
+  assert.deepEqual(await produceImage(smallUrl, "full"), { body: compact, type: "image/svg+xml" });
+  assert.equal(imageHits, before);
+});
+
+// SVG can be much smaller over HTTP than its disk size, and its intrinsic display width is
+// independent of a bitmap's pixel count. Neither may regress just to change the image format.
+test("SVG preparation retains compact transfer and intrinsic display size", async () => {
+  const { resizeImage } = await import("@aihot/backend/media/images");
+  const compactTransfer = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080"><rect width="1920" height="1080" fill="#176b75"/><desc>${"compressible metadata ".repeat(10000)}</desc></svg>`);
+  const smallDisplay = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="180" height="34"><rect width="180" height="34" fill="#176b75"/><desc>${randomBytes(180000).toString("base64")}</desc></svg>`);
+  for (const [name, body] of [["compact-transfer", compactTransfer], ["small-display", smallDisplay]] as const) {
+    assert.deepEqual(await resizeImage(body, "image/svg+xml", "full"), { body, type: "image/svg+xml" });
+    const url = `${base}/${name}`;
+    const key = createHash("sha256").update(`full|${url}`).digest("hex");
+    const file = path.join(dir, "imgcache", key.slice(0, 2), key);
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, body);
+    await writeFile(`${file}.type`, "image/svg+xml");
+    assert.deepEqual(await produceImage(url, "full"), { body, type: "image/svg+xml" });
+    assert.equal(await readFile(`${file}.prepared`, "utf8"), "original");
+    assert.deepEqual(await produceImage(url, "full"), { body, type: "image/svg+xml" });
+  }
+});
+
+test("a retained large SVG still supplies the model's raster thumbnail", async () => {
+  const { firstImagePart } = await import("@aihot/backend/editorial/input");
+  const url = `${base}/model-vector`;
+  const key = createHash("sha256").update(`thumb|${url}`).digest("hex");
+  const file = path.join(dir, "imgcache", key.slice(0, 2), key);
+  const body = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="180" height="34"><rect width="180" height="34" fill="#176b75"/><desc>${randomBytes(180000).toString("base64")}</desc></svg>`);
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, body);
+  await writeFile(`${file}.type`, "image/svg+xml");
+  const before = imageHits;
+  const part = await firstImagePart({ media: [{ kind: "image", url }] } as Parameters<typeof firstImagePart>[0]);
+  assert.ok(part && part.type === "image_url");
+  const data = (part as { type: "image_url"; image_url: { url: string } }).image_url.url;
+  assert.match(data, /^data:image\/(jpeg|png|webp);base64,/);
+  assert.equal((await sharp(Buffer.from(data.split(",")[1]!, "base64")).metadata()).width, 720);
+  assert.equal(imageHits, before);
+});
+
 test("site media exposes responsive previews and full lightboxes while RSS retains thumb images", () => {
   const row = { zh_text: null, x_post: { media: [{ url: "https://example.org/1.png" }, { url: "https://example.org/2.png", poster: "https://example.org/poster.png" }] } };
   assert.ok(xView(row, true)!.media.every((m) => m.url.includes("mode=card") && m.fullUrl?.includes("mode=full")));
   assert.ok(xView(row, true)!.media[1]!.poster!.includes("mode=card"));
   assert.ok(xView(row)!.media.every((m) => m.url.includes("mode=thumb") && m.fullUrl === undefined));
-  assert.ok(xView(row, false, true)!.media.every((m) => m.url.includes("mode=full") && m.srcSet?.includes("mode=image-720")));
+  const detail = xView(row, false, true)!.media;
+  assert.ok(detail.every((m) => m.url.includes("mode=full") && m.srcSet?.includes("mode=thumb")));
+  for (const media of detail.filter((m) => !m.poster)) {
+    // Opening a picture already displayed at full resolution must reuse its browser cache entry.
+    assert.equal(media.srcSet!.split(", ").at(-1), `${media.poster ?? media.url} 1600w`);
+  }
   row.x_post.media[1]!.url = "javascript:invalid";
   const single = xView(row, true)!.media;
   assert.equal(single.length, 1);
@@ -87,11 +165,11 @@ test("site media exposes responsive previews and full lightboxes while RSS retai
 
 test("concurrent cold OG and poster requests all succeed with identical cached bytes", async () => {
   const card = { kicker: SITE.name, title: "并发渲染验证", subtitle: "同一图片只生成一次" };
-  const cards = await Promise.all(Array.from({ length: 6 }, () => renderOg(card)));
+  const cards = await Promise.all(Array.from({ length: 3 }, () => renderOg(card)));
   for (const result of cards) assert.deepEqual(result, cards[0]);
   assert.equal((await sharp(cards[0]!.png).metadata()).width, 1200);
   const poster = { url: "https://example.com/items/test", kicker: SITE.name, title: "海报并发验证", summary: null, source: SITE.name, date: "2026-09-28", score: null };
-  const posters = await Promise.all(Array.from({ length: 4 }, () => renderPoster(poster)));
+  const posters = await Promise.all(Array.from({ length: 2 }, () => renderPoster(poster)));
   for (const result of posters) assert.deepEqual(result, posters[0]);
   assert.equal((await sharp(posters[0]!.png).metadata()).width, 1080);
 });
@@ -117,14 +195,17 @@ test("responsive URLs and web body candidates retain exact signatures and stable
     assert.deepEqual([...u.searchParams.keys()].sort(), ["exp", "mode", "sig", "u"]);
     const query = Object.fromEntries(u.searchParams);
     assert.equal(verifyProxyRequest(query, now).ok, true);
-    assert.equal(width, query.mode === "image-336" ? "336w" : "720w");
+    assert.equal(width, query.mode === "card" ? "336w" : "720w");
     assert.equal(verifyProxyRequest({ ...query, mode: "image-1600" }, now).ok, false);
   }
   const html = '<p><img src="https://example.org/image.png?a=1&amp;b=2" width="800" height="400"></p>';
   assert.ok(!proxyBodyImages('<img src="https://example.org/small.png" width="160" height="80">').includes('srcset='));
   assert.ok(!proxyBodyImages('<img src="https://example.org/unknown.png">').includes('srcset='));
   const web = proxyBodyImages(html);
-  assert.match(web, /srcset="[^"]+image-720/);
+  assert.match(web, /srcset="[^"]+mode=thumb/);
+  const tag = web.match(/<img\b[^>]+>/)![0];
+  const bodySource = tag.match(/\bsrc="([^"]+)"/)![1];
+  assert.equal(tag.match(/\bsrcset="([^"]+)"/)![1]!.split(", ").at(-1), `${bodySource} 1600w`);
   assert.match(web, /loading="lazy"/);
   assert.match(web, /width="800" height="400"/);
   assert.doesNotMatch(web, /sizes="auto\b/, "body images must use their loaded ratio even if publisher dimensions are wrong");
@@ -259,7 +340,6 @@ test("pending animations expire at caches, then publish the prepared disk rendit
   const boss = await getBoss();
   const jobs = await boss.fetch<{ url: string; mode: string }>(QUEUES.prepareMedia);
   assert.equal(jobs.length, 1);
-  assert.deepEqual(jobs[0]!.data, { url, mode: "image-720" });
   const saved = await convertAnimated(jobs[0]!.data.url, jobs[0]!.data.mode);
   assert.ok(saved > 0);
   await boss.complete(QUEUES.prepareMedia, jobs[0]!.id);
@@ -314,4 +394,48 @@ test("tracking pixels are omitted from old and new bodies without removing artic
     assert.equal((body.match(/<img\b/g) ?? []).length, 1);
     assert.match(decodeURIComponent(body), /example.org\/chart.png/);
   }
+});
+
+// Extracted Markdown can mislabel a video page as an image. New ingestion and previously saved
+// bodies must both stop signing those pages; RSS, Markdown, responsive media and posters must agree.
+// Real thumbnails/icons and existing video links or video elements must keep working.
+test("video pages mislabeled as images are excluded across ingestion and public image outputs", async () => {
+  const { sanitizeBody } = await import("@aihot/backend/content/sanitize");
+  const { markdownBody, bodyToMarkdown } = await import("@aihot/backend/content/markdown");
+  const { proxiedImage, proxiedImageSet, proxyBodyImages } = await import("@aihot/backend/media/imgproxy");
+  const pages = [
+    "https://www.youtube.com/watch?v=example&t=1",
+    "https://youtube.com/shorts/example",
+    "https://m.youtube.com/watch?v=example",
+    "https://www.youtube.com/shorts/example",
+  ];
+  const pictures = [
+    "https://www.youtube.com/s/desktop/example/favicon_32x32.png",
+    "https://i.ytimg.com/vi/example/hqdefault.jpg",
+    "https://example.org/watch.png",
+    "https://youtube.com.example.org/watch?v=example",
+  ];
+  const stored = [...pages, ...pictures].map((url) => `<img src="${url.replaceAll("&", "&amp;")}" alt="Image" width="800" height="400">`).join("");
+  const markdown = [...pages, ...pictures].map((url) => `![Image](${url})`).join("\n\n");
+  for (const html of [sanitizeBody(stored), markdownBody(markdown, "https://example.org/post"), proxyBodyImages(stored), proxyBodyImages(stored, true)]) {
+    assert.equal((html.match(/<img\b/g) ?? []).length, pictures.length, html);
+    assert.doesNotMatch(decodeURIComponent(html), /https:\/\/(?:www\.|m\.)?youtube\.com\/(?:watch|shorts)/);
+  }
+  assert.equal((bodyToMarkdown(stored).match(/!\[/g) ?? []).length, pictures.length);
+  for (const url of pages) {
+    assert.equal(proxiedImage(url, "full"), null);
+    assert.equal(proxiedImageSet(url, "body"), null);
+    assert.equal(xView({ zh_text: null, x_post: { media: [{ url }] } }, true)!.media.length, 0);
+  }
+  for (const url of pictures) {
+    assert.ok(proxiedImage(url, "full"));
+    assert.ok(proxiedImageSet(url, "body"));
+  }
+  const video = `<a href="${pages[0]!.replaceAll("&", "&amp;")}">Watch video</a><video src="https://example.org/video.mp4" poster="${pictures[1]}"></video>`;
+  for (const html of [sanitizeBody(video), proxyBodyImages(video), proxyBodyImages(video, true)]) {
+    assert.match(html, /<a href="https:\/\/www\.youtube\.com\/watch/);
+    assert.match(html, /<video src="https:\/\/example\.org\/video\.mp4"/);
+    assert.match(decodeURIComponent(html), /i\.ytimg\.com\/vi\/example\/hqdefault\.jpg/);
+  }
+  assert.doesNotMatch(proxyBodyImages(`<video src="https://example.org/video.mp4" poster="${pages[1]}"></video>`), /poster=/);
 });

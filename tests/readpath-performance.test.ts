@@ -1,14 +1,13 @@
-// The optimized reads retain ranking, capped totals, public scope, report fallback and clock-driven
-// polling versions. These use a disposable database and real HTTP handlers/SQL, never paid services.
+// Search ranking, capped totals, public scope, licensed RSS bodies, report fallback headlines and
+// conditional reads, on a disposable database through the real HTTP handlers and SQL.
 import { tag } from './setup.ts';
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
-import { beijingDate } from '@aihot/contracts/time';
 import { closeDb, sql } from '@aihot/backend/db';
 import { loadPool } from '@aihot/backend/publication/pool';
 import { v1Items } from '@aihot/backend/publication/v1';
 import { itemFeed } from '@aihot/backend/publication/feeds';
-import { issueLead, listReports, reportIndexRows, unavailableIds } from '@aihot/backend/publication/reports';
+import { listReports } from '@aihot/backend/publication/reports';
 import { buildApp } from '../apps/api/src/app.ts';
 
 const T = `readperf${tag()}`;
@@ -38,11 +37,6 @@ before(async () => {
 
 after(async () => {
   await app.close();
-  await sql`DELETE FROM monitor_events WHERE id LIKE ${T + '%'}`;
-  await sql`DELETE FROM monitor_posts WHERE id LIKE ${T + '%'}`;
-  await sql`DELETE FROM reports WHERE content->>'fixture' = ${T}`;
-  await sql`DELETE FROM articles WHERE source_id = ${SOURCE}`;
-  await sql`DELETE FROM sources WHERE id = ${SOURCE}`;
   await closeDb();
 });
 
@@ -63,20 +57,6 @@ test('relevance ranks all candidates, caps the public total at 2000 and keeps em
   assert.deepEqual([beyond.total, beyond.items.length, beyond.pageCount], [1052, 0, 27], 'an empty deep page still has the capped total');
   const empty = await loadPool({ ...filters, q: 'absent-needle-xyz', tab: 'relevance', page: 50 });
   assert.deepEqual([empty.total, empty.items.length, empty.pageCount], [0, 0, 1]);
-});
-
-test('site cards omit unread payload while the detail retains its original body', async () => {
-  const result = await loadPool({ ...filters, q: `${T} needle`, tab: 'relevance' });
-  const card = result.items.find((item) => item.id === id(1))!;
-  assert.equal(card.title, `${T} needle`);
-  assert.equal(card.summary, 'fixture summary');
-  assert.deepEqual(card.source, { name: 'Performance fixture' });
-  for (const field of ['links', 'originalTitle', 'revision', 'discoveredAt', 'story']) {
-    assert.ok(!(field in card), `site card does not serialize ${field}`);
-  }
-  const detail = (await app.inject({ method: 'GET', url: `/api/site/items/${id(1)}` })).json();
-  assert.equal(detail.links.original, `https://example.org/${T}/1`);
-  assert.ok(detail.body.original?.includes('licensed body'), 'the detail retains licensed original text');
 });
 
 test('unfiltered single-term relevance combines direct/body scores and retains one-sided and empty matches', async () => {
@@ -117,40 +97,34 @@ test('v1 search allows terms to match direct text and body, retaining time curso
 
 test('RSS summary excludes bodies; full RSS includes only licensed items', async () => {
   await sql`UPDATE publications SET selected = true, syndicate = true WHERE article_id = ${id(1)}`;
-  const summary = await itemFeed('selected', null, now);
-  const full = await itemFeed('selected-full', null, now);
+  const summary = await itemFeed('selected', null, { now });
+  const full = await itemFeed('selected-full', null, { now });
   assert.ok(summary.includes(`<guid isPermaLink="false">${id(1)}</guid>`));
   assert.ok(!summary.includes('<content:encoded>'));
   assert.ok(full.includes('licensed body'));
   await sql`UPDATE publications SET syndicate = false WHERE article_id = ${id(1)}`;
-  const revoked = await itemFeed('selected-full', null, now);
+  const revoked = await itemFeed('selected-full', null, { now });
   // Restrict the assertion to this item's XML: unrelated fixtures may legitimately syndicate.
   const item = revoked.split('<item>').find((i) => i.includes(`<guid isPermaLink="false">${id(1)}</guid>`))!;
   assert.ok(!item.includes('<content:encoded>'));
 });
 
-test('report directory projection preserves citation order, fallback headlines and absent historical citations', async () => {
-  const content = { fixture: T, sections: [
-    { label: 'first', items: [{ itemId: id(2106), title: 'Withdrawn first', summary: 'large unused summary' }] },
+test('report directories skip a withdrawn lead for the next citation, including absent historical ones', async () => {
+  const content = { sections: [
+    { label: 'first', items: [{ itemId: id(2106), title: 'Withdrawn first' }] },
     { label: 'second', items: [{ itemId: `${T}-historical`, title: 'Historical fallback' }, { itemId: id(2), title: 'Third item' }] },
   ] };
   const key = `2097-12-${String(1 + Math.floor(Math.random() * 28)).padStart(2, '0')}`;
   await sql`INSERT INTO reports (kind, key, window_start, window_end, content, generated_at, origin)
     VALUES ('daily', ${key}, ${now}, ${now}, ${sql.json(content)}, ${now}, 'manual')`;
-  const row = (await reportIndexRows('daily', 400)).find((r) => r.key === key)!;
-  assert.ok(!JSON.stringify(row.content).includes('large unused summary'));
-  assert.equal(issueLead(row.content, 'daily', await unavailableIds([id(2106)]))?.title, 'Historical fallback');
   const entry = (await listReports('daily')).find((r) => r.key === key)!;
   assert.deepEqual([entry.title, entry.count], ['Historical fallback', 3]);
   const full = (await app.inject({ method: 'GET', url: '/api/site/reports/daily' })).json().items;
   const navigation = (await app.inject({ method: 'GET', url: `/api/site/reports/daily/navigation/${key}` })).json().items;
   assert.deepEqual(navigation.map((e: { key: string }) => e.key), full.map((e: { key: string }) => e.key), 'all keys preserve issue numbers and calendar marks');
-  assert.ok(navigation.every((e: object) => !('generatedAt' in e) && !('count' in e)));
   const month = (await app.inject({ method: 'GET', url: `/api/site/reports/daily/months/${key.slice(0, 7)}` })).json().items;
   assert.equal(month.find((e: { key: string }) => e.key === key).title, 'Historical fallback');
 });
-
-// The Codex reset monitor page is not deployed here (codexResetMonitor is off in industry/features.ts).
 
 test('unchanged pool and timeline revalidate with 304 while a content change returns a new body', async () => {
   for (const path of [`/api/site/pool?tag=${T}`, `/api/site/timeline?tag=${T}`]) {

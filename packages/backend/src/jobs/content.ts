@@ -50,7 +50,7 @@ async function route(articleId: string, db: Db): Promise<Route | null> {
   const pending = row.body_status === "pending";
   const wantsBody = row.config.fetchPublicContent === true || !!row.config.detail || row.kind === "web_list";
   // A showcase item's body is the feed's own; its GitHub pages are never fetched for more.
-  const needsPage = row.participation_mode !== "showcase" && !signal && (wantsBody || (row.bare && pageFetchable(row.url, row.kind)));
+  const needsPage = row.participation_mode !== "showcase" && !signal && pageFetchable(row.url, row.kind) && (wantsBody || row.bare);
   const needsXArticle = row.kind === "x_search" && (!signal || (row.participation_mode === "hot_signal" && !historical));
   return { step: pending && (needsPage || needsXArticle) ? "extract" : "analyze", signal, historical };
 }

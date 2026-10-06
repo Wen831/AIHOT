@@ -1,25 +1,32 @@
 // Operations alerts. The person reading them is the site owner, not an engineer: each
 // message says what readers see, whether it heals by itself and what, if anything, the owner must do.
-//   now    — readers are affected and it has not healed: sent at once, repeated hourly, recovery reported.
-//   today  — money at risk or only the owner can act: sent at once, repeated at most daily, recovery reported.
-//   digest — other follow-ups: one 09:00 message a day, meant to be handed to the AI.
+//   now   — readers are affected and it has not healed: sent at once, repeated hourly, recovery reported.
+//   today — money at risk or only the owner can act: sent at once, repeated at most daily, recovery reported.
+//   later — other follow-ups: one 09:00 message a day, meant to be handed to the AI.
+// A site's responder (modules.ts) filters findings for the owner, preserving repeat and recovery
+// tracking for messages it returns and replacing the default digest policy.
 // Delivery goes through sendAlert (ops chat, internal-chat fallback; off unless FEISHU_INTERNAL_ENABLED).
-import { beijingDate, beijingTime } from "@aihot/contracts/time";
+import { beijingAt, beijingDate } from "@aihot/contracts/time";
+import { ALERTS, EDITION_TIMES } from "@aihot/site";
 import { sql } from "../db.ts";
 import { beijingDay, beijingStamp, duration, formatAlert, formatRecovery, sendAlert, type Finding, type Level } from "../notify/feishu.ts";
+import { stepsOnService } from "../editorial/models.ts";
 import { backupConfigured } from "./backup.ts";
-import { FEATURES } from "@aihot/industry/features";
-import { unmarkedBoardModels } from "../leaderboard/read.ts";
-import { awaitingReviewCondition } from "../monitor/read.ts";
 import { GROUPING_WARN_AFTER_MS, waitingSelectedNews } from "./grouping.ts";
+import { upstreamFindings } from "../media/upstream.ts";
+import { responder, serverModules } from "../modules.ts";
+import { sourceHealth, sourceHealthList } from "../sources/health.ts";
 
-const REPEAT_MS: Record<Exclude<Level, "digest">, number> = { now: 3600_000, today: 24 * 3600_000 };
+const REPEAT_MS: Record<Exclude<Level, "later">, number> = { now: 3600_000, today: 24 * 3600_000 };
 
 // Valves default off: read at call time, only an explicit "true" turns them on.
 const collecting = () => process.env.COLLECT_ENABLED === "true";
 const modelsOn = () => process.env.MODEL_CALLS_ENABLED === "true";
-/** How long the site may go without a new article before it counts as stalled (small source lists are quieter). */
-const QUIET_MS = Number(process.env.ALERT_QUIET_MINUTES || 360) * 60_000;
+/**
+ * How long the site may go without a new article before it counts as stalled (ALERT_QUIET_MINUTES, else
+ * the site's own setting; small source lists are quieter). At most a day: the check looks one day back.
+ */
+const QUIET_MINUTES = Math.min(Number(process.env.ALERT_QUIET_MINUTES || ALERTS.quietMinutes), 1440);
 
 /** Everything wrong right now, with its level. */
 export async function collectFindings(now = Date.now()): Promise<Finding[]> {
@@ -31,20 +38,24 @@ export async function collectFindings(now = Date.now()): Promise<Finding[]> {
   const [hb] = await sql<{ value: { startedAt?: string } }[]>`SELECT value FROM settings WHERE key = 'heartbeat.worker'`;
   const settled = !hb?.value.startedAt || now - Date.parse(hb.value.startedAt) > 20 * 60_000;
   if (settled && collecting()) {
-    const [last] = await sql<{ at: Date | null }[]>`SELECT max(discovered_at) AS at FROM articles WHERE discovered_at > ${new Date(now - 4 * QUIET_MS)}`;
-    const [anySource] = await sql`SELECT 1 FROM sources WHERE enabled LIMIT 1`;
-    if (anySource && (!last?.at || now - last.at.getTime() > QUIET_MS)) {
-      out.push({
-        key: "content.collect",
-        level: "now",
-        title: "网站停止收录新内容",
-        recoveredTitle: "网站收录已恢复",
-        impact: last?.at ? `最后一篇新文章收录于 ${beijingStamp(last.at)}，之后网站不会出现新内容` : "很久没有收录任何新文章",
-        heals: "没有",
-        action: "转给 AI 立即处理",
-        detail: `articles.discovered_at 超过 ${Math.round(QUIET_MS / 60_000)} 分钟没有新值（ALERT_QUIET_MINUTES）；查 sources.schedule、出网代理与采集失败`,
-        since: last?.at ?? undefined,
-      });
+    const [last] = await sql<{ at: Date | null }[]>`SELECT max(a.discovered_at) AS at FROM articles a
+      JOIN sources s ON s.id = a.source_id WHERE s.participation_mode = 'editorial' AND a.discovered_at > now() - interval '1 day'`;
+    if (!last?.at || now - last.at.getTime() > QUIET_MINUTES * 60_000) {
+      // A site without an enabled source has nothing to collect.
+      const [anySource] = await sql`SELECT 1 FROM sources WHERE enabled AND participation_mode = 'editorial' LIMIT 1`;
+      if (anySource) {
+        out.push({
+          key: "content.collect",
+          level: "now",
+          title: "网站停止收录新文章",
+          recoveredTitle: "网站收录已恢复",
+          impact: last?.at ? `读者看不到新文章：最后一篇收录于 ${beijingStamp(last.at)}` : "读者看不到新文章：一天内没有收录任何文章",
+          heals: ALERTS.usualFlow ? `没有，${ALERTS.usualFlow}` : "没有",
+          action: "尽快发起一次维护处理",
+          detail: `editorial articles.discovered_at 超过 ${QUIET_MINUTES} 分钟没有新值（热度信号单独评估）；查 sources.schedule、出网代理与采集失败`,
+          since: last?.at ?? undefined,
+        });
+      }
     }
   }
   if (settled && collecting() && modelsOn()) {
@@ -89,8 +100,9 @@ export async function collectFindings(now = Date.now()): Promise<Finding[]> {
         since: p!.waiting >= 10 && p!.oldest ? p!.oldest : undefined,
       });
     }
-    // The daily report is composed at 08:00, and tried again every half hour until it exists.
-    if (Number(beijingTime(now).slice(0, 2)) >= 10) {
+    // The daily report is composed from its edition time, and tried again every half hour until it exists:
+    // two hours later it is overdue.
+    if (now >= beijingAt(beijingDate(now), EDITION_TIMES.daily).getTime() + 2 * 3600_000) {
       const [r] = await sql`SELECT 1 FROM reports WHERE kind = 'daily' AND key = ${beijingDate(now)}`;
       if (!r) {
         out.push({
@@ -100,7 +112,7 @@ export async function collectFindings(now = Date.now()): Promise<Finding[]> {
           recoveredTitle: "今日日报已生成",
           impact: "读者看不到今天的日报",
           heals: "系统每半小时补做一次，到现在还没成功",
-          action: "转给 AI 处理",
+          action: "尽快发起一次维护处理",
           detail: `reports daily ${beijingDate(now)} 不存在；看 reports.compose 的运行记录`,
         });
       }
@@ -120,42 +132,10 @@ export async function collectFindings(now = Date.now()): Promise<Finding[]> {
       level: "today",
       title: "飞书内容群有推送没发出去",
       recoveredTitle: "飞书内容群推送恢复正常",
-      impact: `过去 24 小时 ${refused!.n} 条精选或重置通知没进${refused!.target ?? "内容群"}`,
+      impact: `过去 24 小时 ${refused!.n} 条通知没进${refused!.target ?? "内容群"}`,
       heals: "不会自动重发",
       action: "转给 AI 处理；如果推送机器人被移出了群，需要你把它加回去",
       detail: refused!.response ?? "",
-    });
-  }
-
-  // Reset monitor: posts are recognized in order, so one that keeps failing holds up every later one.
-  const [stuck] = await sql<{ url: string; collected_at: Date; failures: { count: number; error?: string } | null }[]>`
-    SELECT p.url, p.collected_at, s.value AS failures FROM monitor_posts p LEFT JOIN monitor_state s ON s.key = 'failures:' || p.id
-    WHERE p.processed_at IS NULL ORDER BY p.published_at, p.id LIMIT 1`;
-  if (stuck && now - stuck.collected_at.getTime() > 60 * 60_000) {
-    out.push({
-      key: "monitor.stuck",
-      level: "today",
-      title: "Codex 重置监控卡住了",
-      recoveredTitle: "Codex 重置监控已恢复",
-      impact: "新的重置消息确认不了，内容群收不到重置通知",
-      heals: "暂时没有",
-      action: "转给 AI 处理",
-      detail: `${stuck.url} 等待 ${duration(now - stuck.collected_at.getTime())}${stuck.failures ? `，识别失败 ${stuck.failures.count} 次：${stuck.failures.error ?? ""}` : ""}；后台“Codex 重置 → 帖子与识别 → 待识别”可跳过`,
-      since: stuck.collected_at,
-    });
-  }
-  // Posts whose claims wait for a person (an unsure reading, a quote not in the post).
-  const review = await sql<{ url: string }[]>`SELECT url FROM monitor_posts WHERE ${awaitingReviewCondition()} ORDER BY published_at DESC LIMIT 5`;
-  if (review.length) {
-    out.push({
-      key: "monitor.review",
-      level: "today",
-      title: "有 Codex 重置消息需要你确认",
-      recoveredTitle: "待复核的重置消息已处理",
-      impact: "系统对这几条帖子的判断没把握，结论暂时没有生效，也没有推送",
-      heals: "不会",
-      action: "到后台“Codex 重置 → 帖子与识别 → 需复核”看一下；确认后需要的话在群里说明",
-      detail: review.map((h) => h.url).join(" "),
     });
   }
 
@@ -183,19 +163,48 @@ export async function collectFindings(now = Date.now()): Promise<Finding[]> {
         since: new Date(since),
       });
     } else if (!b || !b.value.uploaded || age > 30 * 3600_000) {
-      out.push({ key: "backup.stale", level: "digest", title: "数据库备份超过一天没成功", detail: b ? `最近一次 ${beijingStamp(b.value.at)}${state ? `（${state}）` : ""}；看 ops.backup` : "还没有成功的备份记录" });
+      out.push({ key: "backup.stale", level: "later", title: "数据库备份超过一天没成功", detail: b ? `最近一次 ${beijingStamp(b.value.at)}${state ? `（${state}）` : ""}；看 ops.backup` : "还没有成功的备份记录" });
     }
   }
 
-  // Follow-ups for the daily digest
+  out.push(...(await upstreamFindings(now)));
+
+  // What the site's modules find.
+  for (const m of serverModules()) if (m.alerts) out.push(...(await m.alerts(now)));
+
+  // Follow-ups
+  if (collecting()) {
+    for (const group of await sourceHealth(now)) {
+      if (group.failing.length) out.push({
+        key: `sources.failing.${group.mode}`, level: "later", title: `${group.name}有 ${group.failing.length} 个信源连续抓取失败`,
+        detail: sourceHealthList(group.failing, s => `连续失败 ${s.fail_count} 次${s.last_error ? `，${s.last_error}` : ""}`) + "；转给 AI 检查抓取错误",
+      });
+      if (group.unstable.length) out.push({
+        key: `sources.unstable.${group.mode}`, level: "later", title: `${group.name}有 ${group.unstable.length} 个信源反复抓取失败`,
+        detail: sourceHealthList(group.unstable, s => `近 7 天失败 ${s.failed}/${s.runs} 次`) + "；即使最近成功也需检查，避免继续漏收",
+      });
+      if (group.silent.length) out.push({
+        key: `sources.silent.${group.mode}`, level: "later", title: `${group.name}有 ${group.silent.length} 个信源 7 天未发现新内容`,
+        detail: sourceHealthList(group.silent, s => `近 7 天 ${s.runs} 次抓取、0 条新发现`) + "；需对照原站，区分低频更新与采集失效",
+      });
+      if (group.quality.length) out.push({
+        key: `sources.quality.${group.mode}`, level: "later", title: `${group.name}有 ${group.quality.length} 个信源需要核实文章质量`,
+        detail: sourceHealthList(group.quality, s => `近 7 天缺发布时间 ${s.undated} 篇、反复修订 ${s.repeated} 篇`) + "；缺时间可能让新闻按历史文章处理，反复修订需核对正文是否混入变化内容",
+      });
+      if (group.detailFailures.length) out.push({
+        key: `sources.details.${group.mode}`, level: "later", title: `${group.name}有 ${group.detailFailures.length} 个信源详情补全失败`,
+        detail: sourceHealthList(group.detailFailures, s => `近 7 天 ${s.detail_failures} 次`) + "；查看抓取记录中的详情地址与错误",
+      });
+    }
+  }
   const [r] = await sql<{ receipts: number; services: string | null; deliveries: number }[]>`
     SELECT (SELECT count(*)::int FROM receipts WHERE status = 'unknown') AS receipts,
            (SELECT string_agg(DISTINCT service || '/' || purpose, '、') FROM receipts WHERE status = 'unknown') AS services,
            (SELECT count(*)::int FROM deliveries WHERE status = 'unknown') AS deliveries`;
   if (r!.receipts > 0) {
-    out.push({ key: "receipts.unknown", level: "digest", title: `${r!.receipts} 个付费请求的结果尚未确认`, detail: `${r!.services}；可能影响内容处理，后台“运行”页查看影响；自动恢复后仍未知的请求需核对后放行` });
+    out.push({ key: "receipts.unknown", level: "later", title: `${r!.receipts} 个付费请求的结果尚未确认`, detail: `${r!.services}；可能影响内容处理，后台“运行”页查看影响；自动恢复后仍未知的请求需核对后放行` });
   }
-  if (r!.deliveries > 0) out.push({ key: "deliveries.unknown", level: "digest", title: `${r!.deliveries} 条飞书内容群推送不确定是否送达`, detail: "后台“运行”页核对群里有没有，再标记或重发" });
+  if (r!.deliveries > 0) out.push({ key: "deliveries.unknown", level: "later", title: `${r!.deliveries} 条飞书内容群推送不确定是否送达`, detail: "后台“运行”页核对群里有没有，再标记或重发" });
 
   // Runnable jobs (deferred ones excluded) that have waited more than two hours.
   const queues = await sql<{ name: string; n: number; oldest: Date }[]>`
@@ -203,51 +212,36 @@ export async function collectFindings(now = Date.now()): Promise<Finding[]> {
     WHERE state IN ('created', 'retry') AND start_after <= now() AND name NOT LIKE 'cron.%' GROUP BY 1`;
   for (const q of queues) {
     if (now - q.oldest.getTime() > 2 * 3600_000) {
-      out.push({ key: `queue.${q.name}`, level: "digest", title: `后台任务排队超过 2 小时：${q.name}`, detail: `${q.n} 个等待，最早的等了 ${duration(now - q.oldest.getTime())}` });
+      out.push({ key: `queue.${q.name}`, level: "later", title: `后台任务排队超过 2 小时：${q.name}`, detail: `${q.n} 个等待，最早的等了 ${duration(now - q.oldest.getTime())}` });
     }
   }
 
-  // The leaderboard checks read state that only its fetch jobs refresh. With the feature off
-  // nothing refreshes it, so a leftover failure would alert forever — both checks stay silent.
-  if (FEATURES.leaderboard) {
-    // A leaderboard source keeps its last snapshot while failing.
-    const [lb] = await sql<{ value: { sources?: Record<string, { ok: boolean; lastOkAt: string | null; error?: string }> } }[]>`SELECT value FROM settings WHERE key = 'leaderboard.fetch'`;
-    const stale = Object.entries(lb?.value.sources ?? {}).filter(([, s]) => !s.ok && s.lastOkAt && now - Date.parse(s.lastOkAt) > 26 * 3600_000);
-    if (stale.length) {
-      out.push({
-        key: "leaderboard.fetch",
-        level: "digest",
-        title: `模型榜有 ${stale.length} 个评测来源超过一天没抓到，榜单暂用上一份数据`,
-        detail: stale.slice(0, 6).map(([k, s]) => `${k}：${s.error ?? "失败"}（上次成功 ${beijingStamp(s.lastOkAt!)}）`).join("；"),
-      });
-    }
-
-    const unmarked = await unmarkedBoardModels().catch(() => [] as string[]);
-    if (unmarked.length) {
-      out.push({
-        key: "leaderboard.marks",
-        level: "digest",
-        title: `模型榜有 ${unmarked.length} 个模型没有厂商标志，暂时显示首字母`,
-        detail: `${unmarked.slice(0, 8).join("、")}；标志文件放 assets/model-providers，映射在 packages/backend/src/leaderboard/registry.ts`,
-      });
-    }
-  }
+  // The site's modules' follow-ups.
+  for (const m of serverModules()) if (m.followUps) out.push(...(await m.followUps(now)));
   return out;
 }
 
-const MODEL_STOPS = "用到这家模型的步骤停了（看后台“模型与评测”），新内容可能进不了精选";
-const PROVIDERS: Record<string, { name: string; stops: string; where: string }> = {
-  llm: { name: "默认模型服务", stops: "新文章的精选、摘要、归组和日报停了", where: "模型服务商的控制台" },
-  zhipu: { name: "智谱", stops: MODEL_STOPS, where: "智谱开放平台" },
-  dashscope: { name: "阿里云百炼", stops: MODEL_STOPS, where: "阿里云百炼控制台" },
-  deepseek: { name: "DeepSeek", stops: MODEL_STOPS, where: "DeepSeek 开放平台" },
-  mimo: { name: "小米 MiMo", stops: MODEL_STOPS, where: "小米 MiMo 开放平台" },
+/** What stops when a model service refuses us: the steps that default to its models, else a pointer to the admin. */
+function modelStops(service: string): string {
+  const steps = stepsOnService(service);
+  return steps.length ? `${steps.join("、")}停了` : "用到这家模型的步骤停了（看后台“模型与评测”），新内容可能进不了精选";
+}
+/** `stops` is for the services that are not models; a model service's follows from the steps that use it. */
+const PROVIDERS: Record<string, { name: string; where: string; stops?: string }> = {
+  llm: { name: "默认模型服务", where: "模型服务商的控制台" },
+  zhipu: { name: "智谱", where: "智谱开放平台" },
+  dashscope: { name: "阿里云百炼", where: "阿里云百炼控制台" },
+  deepseek: { name: "DeepSeek", where: "DeepSeek 开放平台" },
+  mimo: { name: "小米 MiMo", where: "小米 MiMo 开放平台" },
   socialdata: { name: "SocialData", stops: "X（推特）上的新内容收不到", where: "SocialData 后台" },
   jina: { name: "Jina", stops: "部分文章取不到正文", where: "Jina 后台" },
   dajiala: { name: "极致了（Dajiala）", stops: "公众号新文章收不到", where: "极致了后台" },
 };
 export const providerName = (service: string) => PROVIDERS[service]?.name ?? service;
-export const providerStops = (service: string) => PROVIDERS[service]?.stops ?? "相关功能停了";
+export const providerStops = (service: string) => {
+  const p = PROVIDERS[service];
+  return p ? (p.stops ?? modelStops(service)) : "相关功能停了";
+};
 export const providerConsole = (service: string) => PROVIDERS[service]?.where ?? `${service} 后台`;
 
 /** Paid services that refuse us (no balance, a dead key), and daily budgets used up. */
@@ -262,11 +256,12 @@ async function providerFindings(): Promise<Finding[]> {
     out.push({
       key: `provider.refused.${p.service}`,
       level: "today",
+      owner: true,
       title: `${providerName(p.service)} 拒绝服务，可能欠费或账号失效`,
       recoveredTitle: `${providerName(p.service)} 已恢复服务`,
       impact: providerStops(p.service),
       heals: "不会",
-      action: `去${providerConsole(p.service)}看余额和账号状态；充值或恢复后系统会自动继续`,
+      action: `去${providerConsole(p.service)}看余额和账号状态，充值或恢复后系统会自动继续；两样都正常的话，发起一次维护查原因`,
       detail: `最近 1 小时被拒 ${p.n} 次：${p.last}`,
     });
   }
@@ -277,7 +272,7 @@ async function providerFindings(): Promise<Finding[]> {
   for (const c of capped) {
     out.push({
       key: `budget.day.${c.service}`,
-      level: "today",
+      level: "later",
       title: `${providerName(c.service)} 过去 24 小时的调用额度用完了`,
       recoveredTitle: `${providerName(c.service)} 调用额度已恢复`,
       impact: `${providerStops(c.service)}，直到额度随时间腾出来`,
@@ -293,15 +288,21 @@ interface AlertState {
   [key: string]: { title: string; recoveredTitle?: string; since: string; sentAt: string };
 }
 
-/** Every 10 minutes: new problems and recoveries of the now/today levels go out; digest items wait for 09:00. */
+/**
+ * Every 10 minutes: new problems and recoveries of the now/today levels go out; follow-ups wait for 09:00.
+ * With a responder, only what it hands back goes out, and what it still holds is not reported as recovered.
+ */
 export async function checkAlerts(now = Date.now()) {
-  const found = (await collectFindings(now)).filter((f) => f.level !== "digest");
+  const all = await collectFindings(now);
+  const r = responder();
+  const { tell, held } = r ? await r.take(all, now) : { tell: all, held: [] as string[] };
+  const found = tell.filter((f) => f.level !== "later");
   const [row] = await sql<{ value: AlertState }[]>`SELECT value FROM settings WHERE key = 'alerts.state'`;
   const state: AlertState = { ...(row?.value ?? {}) };
   const sent: string[] = [];
   for (const f of found) {
     const open = state[f.key];
-    if (open && now - Date.parse(open.sentAt) <= REPEAT_MS[f.level as Exclude<Level, "digest">]) continue;
+    if (open && now - Date.parse(open.sentAt) <= REPEAT_MS[f.level as Exclude<Level, "later">]) continue;
     const since = open ? new Date(open.since) : (f.since ?? new Date(now));
     const msg = formatAlert(f, since, now, !!open);
     await sendAlert(msg.title, msg.lines);
@@ -309,7 +310,7 @@ export async function checkAlerts(now = Date.now()) {
     sent.push(f.key);
   }
   for (const [key, open] of Object.entries(state)) {
-    if (found.some((f) => f.key === key)) continue;
+    if (found.some((f) => f.key === key) || held.includes(key)) continue;
     const msg = formatRecovery(open, new Date(open.since), now);
     await sendAlert(msg.title, msg.lines);
     sent.push(`${key}:recovered`);
@@ -320,9 +321,9 @@ export async function checkAlerts(now = Date.now()) {
   return { open: Object.keys(state), sent };
 }
 
-/** 09:00: one message with other follow-ups; nothing when there are none. */
+/** 09:00 (without a responder): one message with the follow-ups; nothing when there are none. */
 export async function sendDigest(now = Date.now()) {
-  const items = (await collectFindings(now)).filter((f) => f.level === "digest");
+  const items = (await collectFindings(now)).filter((f) => f.level === "later");
   const lines = items.map((f, i) => `${i + 1}. ${f.title}${f.detail ? `\n   ${f.detail}` : ""}`);
   if (!lines.length) return { items: 0 };
   await sendAlert(`📋 系统日报 · ${beijingDay(now)}`, ["以下事项需要跟进，具体影响见各条说明；可把整条转给 AI 处理。", ...lines]);

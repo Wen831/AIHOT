@@ -15,16 +15,17 @@ export function channelOf(sourceKind: string, hasXPost: boolean): "x" | "news" {
   return sourceKind === "x_search" || hasXPost ? "x" : "news";
 }
 
-/** Public pool (/all): editorial sources AI-relevant, showcase items written, with a Chinese title and summary. */
+/** Public pool (/all): editorial sources AI-relevant, showcase items written, with a Chinese title and summary or an original post. */
 export function isPoolEligible(input: {
   participationMode: string;
   relevance: string | null;
   title: string | null;
   summary: string | null;
+  originalPost?: boolean;
 }): boolean {
   // A showcase item is written, not judged: its own Chinese copy is the eligibility, there is no relevance.
   if (input.participationMode === "showcase") return !!input.title && !!input.summary;
-  return input.participationMode === "editorial" && input.relevance === "pass" && !!input.title && !!input.summary;
+  return input.participationMode === "editorial" && input.relevance === "pass" && !!input.title && (!!input.summary || input.originalPost === true);
 }
 
 /**
@@ -58,8 +59,8 @@ export function mayRedistribute(source: SourceFacts, bodyMode: "full" | "summary
  * Detail pages are noindex by default. Selected items are indexed automatically; an editor
  * can mark any other public page for indexing, or exclude a page, which then stays out.
  */
-export function isIndexable(p: { visibility: string; hasSummary: boolean; selected: boolean; seoIndexedAt: Date | null; seoExcludedAt: Date | null }): boolean {
-  return p.visibility === "public" && p.hasSummary && p.seoExcludedAt === null && (p.selected || p.seoIndexedAt !== null);
+export function isIndexable(p: { visibility: string; sourceMode: string; hasSummary: boolean; selected: boolean; seoIndexedAt: Date | null; seoExcludedAt: Date | null }): boolean {
+  return p.visibility === "public" && hasItemPage(p) && p.hasSummary && p.seoExcludedAt === null && (p.selected || p.seoIndexedAt !== null);
 }
 
 /** Display tags exclude internal entity markers. */

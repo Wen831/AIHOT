@@ -3,6 +3,8 @@
 import { audit } from "../audit.ts";
 import { sql, type Db } from "../db.ts";
 import { publishArticleTx } from "../publication/publish.ts";
+import { emit } from "../modules.ts";
+import { hasItemPage } from "../publication/rules.ts";
 
 /**
  * An UPDATE articles SET fragment: the article's grouping and its "adds value" check are decided again
@@ -67,6 +69,8 @@ export async function reconcileMaterialSource(db: Db, articleId: string, observe
   if (owned.length !== 1) return false;
   const publisher = owned[0]!;
   if (publisher.id === article.source_id) return false;
+  const [previous] = await db<{ visibility: string }[]>`SELECT visibility FROM publications WHERE article_id = ${articleId}`;
+  const wasReadable = !!previous && hasItemPage({ visibility: previous.visibility, sourceMode: article.participation_mode });
   // Aggregator submitters are not article authors. Keep a name only from the publisher discovery.
   const author = observed?.sourceId === publisher.id ? observed.author?.trim() || null : null;
   // A completed signal has never been judged for editorial use. An existing judgement of this
@@ -78,6 +82,7 @@ export async function reconcileMaterialSource(db: Db, articleId: string, observe
   await audit("system", "article.attribution", `article:${articleId}`, "唯一 T1 原发信源与已验证 URL 范围一致（显式配置或已观察官网列表）",
     { sourceId: article.source_id, author: article.author }, { sourceId: publisher.id, author }, { db });
   // This changes attribution and the public seat, not the judgement or selection threshold.
-  await publishArticleTx(db as Parameters<typeof publishArticleTx>[0], articleId);
+  const published = await publishArticleTx(db as Parameters<typeof publishArticleTx>[0], articleId);
+  if (wasReadable && published?.changed) await emit("articleChanged", { id: articleId, kind: "content", reduced: published.reduced, reason: "publisher attribution" }, db);
   return true;
 }

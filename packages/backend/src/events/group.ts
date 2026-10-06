@@ -2,7 +2,7 @@
 // facts hang on a story, an occurrence with its direct developments. Recall (recall.ts): the same
 // title-and-summary embedding on both sides over the reports of the last 14 days (shared bigrams
 // without an embedding key), plus the same URL and the X post a post replies to or quotes.
-// Identity: one three-way relation judgement over the candidate
+// Identity: one four-way relation judgement over the candidate
 // facts with their representative reports fully described (relate.ts); a merge that is not obvious
 // from similarity is confirmed by a second vendor before it is written; a development attaches only
 // to the fact that started its story, so stories do not grow by chaining. Manual corrections
@@ -284,12 +284,13 @@ async function decide(articleId: string, opts: GroupOptions, revision: number, r
   }
   const composite = an?.composite === true;
   const unsupported = an?.output?.scope === "unknown" && !an.output.fact;
-  const left = composite || unsupported
+  const historical = isHistorical(a);
+  const left = composite || unsupported || historical
     ? await sql.begin(async (tx) => { await lockCurrentRevision(tx, articleId, a.revision); return resetAutomatic(tx, articleId); })
     : [];
 
   // History founds no event and adds no heat (isHistorical); a regroup takes it out of any it joined.
-  if (isHistorical(a)) {
+  if (historical) {
     await markGrouped(articleId, a.revision, { addsValue: true, reason: "历史资料按原文时间归档" });
     return { verdict: "historical" };
   }

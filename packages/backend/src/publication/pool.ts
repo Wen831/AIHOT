@@ -2,7 +2,7 @@
 import type { PoolResponse, TimelineFilters } from "@aihot/contracts/site";
 import { beijingDate, beijingMidnight } from "@aihot/contracts/time";
 import { one, sql, withCustomPlans, type Db } from "../db.ts";
-import { cachedByKey } from "../lib/cache.ts";
+import { cachedByKey, sharedSearch } from "../lib/cache.ts";
 import {
   categoryCondition, channelCondition, ITEM_COLUMNS, ITEM_FROM, seatHolders, tagCondition, toFeedItemSummary,
   type ItemRow,
@@ -118,8 +118,17 @@ export interface PoolQuery extends TimelineFilters {
   now?: Date;
 }
 
-export async function loadPool(query: PoolQuery): Promise<PoolResponse> {
-  const now = query.now ?? new Date();
+// Identical searches share their read before taking search capacity.
+const searchPool = sharedSearch(
+  (q: PoolQuery) => JSON.stringify([q.channel, q.category, q.tag, q.q, q.tab, q.page]),
+  queryPool, (q) => !!q.q?.trim(),
+);
+
+export function loadPool(query: PoolQuery): Promise<PoolResponse> {
+  return searchPool(query, query.now);
+}
+
+async function queryPool(query: PoolQuery, now: Date): Promise<PoolResponse> {
   const page = Math.min(Math.max(query.page ?? 1, 1), POOL_MAX_PAGES);
   const q = query.q?.trim() || null;
   const tab = q && query.tab === "relevance" ? "relevance" : "time";
@@ -169,7 +178,7 @@ export async function loadPool(query: PoolQuery): Promise<PoolResponse> {
       // A query naming a company also takes the articles about it, ranked first.
       const scored = entityTag ? sql`
           SELECT p.article_id, p.timeline_at, max(matches.part) + (${titleScore}) + (CASE WHEN p.tags @> ${[entityTag]}::text[] THEN 10 ELSE 0 END) AS rel
-          FROM (${matches} UNION ALL SELECT article_id, 0 FROM publications WHERE tags @> ${[entityTag]}::text[]) matches
+          FROM (SELECT article_id, part FROM matches UNION ALL SELECT article_id, 0 FROM publications WHERE tags @> ${[entityTag]}::text[]) matches
           JOIN publications p ON p.article_id = matches.article_id
           WHERE ${listedCondition(now)} ${filters}
           GROUP BY p.article_id, p.timeline_at, p.title, p.tags` : sql`

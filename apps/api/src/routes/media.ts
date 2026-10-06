@@ -3,7 +3,7 @@
 import type { FastifyInstance } from "fastify";
 import { createHash } from "node:crypto";
 import { enqueue, QUEUES } from "@aihot/backend/jobs/queue";
-import { produceImage } from "@aihot/backend/media/images";
+import { ImageBudgetExceeded, produceImage } from "@aihot/backend/media/images";
 import { verifyProxyRequest } from "@aihot/backend/media/imgproxy";
 import { etagMatches, looseQuery } from "../http/respond.ts";
 
@@ -35,7 +35,7 @@ export function registerMedia(app: FastifyInstance) {
           await enqueue(QUEUES.prepareMedia, { url: verdict.url, mode: verdict.mode }, { singletonKey: `rendition:${key}` });
           queued = true;
         } catch (error) {
-          req.log.warn({ err: String(error) }, "img-proxy preparation enqueue failed");
+          req.log.warn({ err: error }, "img-proxy preparation enqueue failed");
         }
       }
       // A validator describes the actual representation, including a GIF replaced by prepared WebP.
@@ -50,7 +50,10 @@ export function registerMedia(app: FastifyInstance) {
       if (etagMatches(req.headers["if-none-match"], etag)) return reply.code(304).send();
       return reply.send(body);
     } catch (error) {
-      req.log.warn({ err: String(error), host: new URL(verdict.url).hostname }, "img-proxy upstream failed");
+      if (error instanceof ImageBudgetExceeded) {
+        return reply.code(503).header("Retry-After", "60").header("Cache-Control", "no-store").type("text/plain; charset=utf-8").send("Image proxy is busy; try again later");
+      }
+      req.log.warn({ err: error, host: new URL(verdict.url).hostname }, "img-proxy upstream failed");
       return reply.code(502).header("Cache-Control", imageCacheControl(q.exp!, 60)).type("text/plain; charset=utf-8").send("Upstream image unavailable");
     }
   });

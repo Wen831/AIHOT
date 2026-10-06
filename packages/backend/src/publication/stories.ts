@@ -1,7 +1,7 @@
 // Stories (events) and the hot ranking through the public read layer. The website sees heat values;
 // v1 and MCP only see ranks and counts.
 import type { HeatPoint, HotResponse, StoryDetail, StoryReportView } from "@aihot/contracts/site";
-import { SITE } from "@aihot/industry/site";
+import { SITE } from "@aihot/site";
 import { sql } from "../db.ts";
 import { cachedByKey, SHARED_ONLY } from "../lib/cache.ts";
 import { proxiedImage, proxiedImageSet } from "../media/imgproxy.ts";
@@ -12,7 +12,7 @@ import { publicSourceName } from "./rules.ts";
 import { latestHotRanking, rankingExtras } from "./hot.ts";
 import { storyTexts } from "./story-text.ts";
 import { topicsOfStory } from "./topics.ts";
-import { itemUrl, storyApiUrl, storyUrl } from "./links.ts";
+import { itemUrl, storyUrl, v1StoryApiUrl, v1StoryUrl } from "./links.ts";
 
 export type StoryLookup = { kind: "found"; storyId: number; publicId: string } | { kind: "merged"; target: string } | { kind: "not_found" };
 
@@ -130,7 +130,7 @@ async function relatedStories(storyId: number, now: Date) {
       SELECT 1 FROM facts f JOIN fact_articles fa ON fa.fact_id = f.id JOIN publications p ON p.article_id = fa.article_id
       JOIN sources s ON s.id = p.source_id
       WHERE f.story_id = st.id AND ${evidenceCondition()} AND ${storyReportCondition(now)}
-    ) ORDER BY st.latest_at DESC NULLS LAST LIMIT 8`;
+    ) ORDER BY st.latest_at DESC NULLS LAST, st.id DESC LIMIT 8`;
 }
 
 export async function loadStoryDetail(storyId: number, now = new Date()): Promise<StoryDetail | null> {
@@ -156,8 +156,9 @@ export async function loadStoryDetail(storyId: number, now = new Date()): Promis
     : [{ n: 0 }];
   const [related, topics, texts] = await Promise.all([relatedStories(storyId, now), topicsOfStory(storyId, now), storyTexts([storyId], now)]);
   const text = texts.get(storyId)!;
-  // Shown beside the latest development, so its time; without one, the timeline's newest report.
-  const latestAt = text.latest?.at ?? latestReport.at;
+  // Historical stories without listed evidence retain their latest readable report.
+  const latest = text.latest ?? latestReport;
+  const latestAt = latest.at;
   // Without a digest or a summary of its own, the story opens with its first development's representative report.
   const origin = developments[developments.length - 1]?.representative;
   return {
@@ -172,8 +173,8 @@ export async function loadStoryDetail(storyId: number, now = new Date()): Promis
     digestUpdatedAt: text.digestUpdatedAt?.toISOString() ?? null,
     summary: text.summary,
     excerpt: !text.digest && !text.summary && origin?.summary ? { text: origin.summary, sourceName: publicSourceName(origin.source_name) } : null,
-    latest: text.latest?.title ?? null,
-    latestReport: text.latest ? { id: text.latest.id } : null,
+    latest: latest.title,
+    latestReport: { id: latest.id },
     whyHot: {
       participants48h: Number(why?.p48 ?? 0),
       newParticipants6h: Number(why?.p6 ?? 0),
@@ -251,6 +252,8 @@ export async function loadHot(): Promise<HotResponse> {
       const picture = covers.get(e.storyId);
       const coverUrl = picture ? proxiedImage(picture.url, "full") : null;
       const text = extras.text(e);
+      // The card clips its text to a few lines; complete public words belong to the event page.
+      const summary = text.summary ? Array.from(text.summary) : null;
       return {
         rank: e.rank,
         story: { publicId: e.storyPublicId, title: e.title },
@@ -263,7 +266,7 @@ export async function loadHot(): Promise<HotResponse> {
         sourceNames: [...new Set(e.sourceNames.map(publicSourceName))],
         participants: extras.participants(e),
         spark: sparks.get(e.storyId) ?? [],
-        summary: text.summary,
+        summary: summary && summary.length > 480 ? summary.slice(0, 480).join('') + '…' : text.summary,
         latest: text.latest,
         cover: picture && coverUrl ? { url: coverUrl, srcSet: proxiedImageSet(picture.url, "hero") ?? undefined, width: picture.width, height: picture.height } : null,
       };
@@ -275,22 +278,25 @@ export async function loadHot(): Promise<HotResponse> {
 
 export async function v1HotTopics() {
   const ranking = await latestHotRanking();
-  const items = (ranking?.entries ?? []).map((e) => ({
-    rank: e.rank,
-    id: e.representativeItemId ?? e.storyPublicId,
-    title: e.title,
-    source: { name: e.representativeSource ?? e.sourceNames[0] ?? SITE.name },
-    links: {
+  const items = (ranking?.entries ?? []).map((e) => {
+    const links = {
       aihot: e.representativeItemId ? itemUrl(e.representativeItemId) : storyUrl(e.storyPublicId),
       original: e.representativeUrl ?? storyUrl(e.storyPublicId),
-      story: storyUrl(e.storyPublicId),
-    },
-    sourceCount: e.sourceCount,
-    signalCount: e.signalCount,
-    participantCount: e.participantCount,
-    sourceNames: e.sourceNames,
-    latestAt: new Date(e.latestAt).toISOString(),
-  }));
+      story: v1StoryUrl(e.storyPublicId),
+    };
+    return {
+      rank: e.rank,
+      id: e.representativeItemId ?? e.storyPublicId,
+      title: e.title,
+      source: { name: e.representativeSource ?? e.sourceNames[0] ?? SITE.name },
+      links,
+      sourceCount: e.sourceCount,
+      signalCount: e.signalCount,
+      participantCount: e.participantCount,
+      sourceNames: e.sourceNames,
+      latestAt: new Date(e.latestAt).toISOString(),
+    };
+  });
   return { schemaVersion: 1 as const, count: items.length, items };
 }
 
@@ -298,17 +304,15 @@ export async function v1Story(storyId: number) {
   const now = new Date();
   const content = await storyContent(storyId, now);
   if (!content) return null;
-  const { s, reports, primaryReports, latestReport, firstReportAt } = content;
-  const latestAt = latestReport.at;
-  // v1 measures by its own timeline, not by the digest writer's rule the site follows (story-text.ts): the
-  // digest while every report it was written from is still in it, and the timeline's newest report as the
-  // latest, which v1 requires.
-  const [d] = await sql<{ digest: string | null; digest_updated_at: Date | null; article_ids: string[] | null }[]>`
-    SELECT digest, digest_updated_at, (SELECT article_ids FROM story_digests WHERE story_id = stories.id ORDER BY version DESC LIMIT 1) AS article_ids
-    FROM stories WHERE id = ${storyId}`;
-  const inTimeline = new Set(primaryReports.map((r) => r.id));
-  const digestCurrent = !d?.article_ids?.some((id) => !inTimeline.has(id));
-  const neighbors = (await relatedStories(storyId, now)).map((r) => ({ publicId: r.public_id, title: r.title, relation: r.relation, links: { aihot: storyUrl(r.public_id), api: storyApiUrl(r.public_id) } }));
+  const { s, reports, latestReport, firstReportAt } = content;
+  // The latest development and digest follow the same evidence as the website.
+  const text = (await storyTexts([storyId], now)).get(storyId)!;
+  const latest = text.latest ?? latestReport;
+  const latestAt = latest.at;
+  const neighbors = (await relatedStories(storyId, now)).map((r) => {
+    const links = { aihot: storyUrl(r.public_id), api: v1StoryApiUrl(r.public_id) };
+    return { publicId: r.public_id, title: r.title, relation: r.relation, links };
+  });
   return {
     schemaVersion: 1 as const,
     story: {
@@ -319,9 +323,9 @@ export async function v1Story(storyId: number) {
       reportCount: reports.length,
       firstReportAt: firstReportAt.toISOString(),
       latestAt: latestAt.toISOString(),
-      latest: latestReport.title,
-      digest: digestCurrent ? d?.digest ?? null : null,
-      digestUpdatedAt: digestCurrent ? d?.digest_updated_at?.toISOString() ?? null : null,
+      latest: latest.title,
+      digest: text.digest,
+      digestUpdatedAt: text.digestUpdatedAt?.toISOString() ?? null,
       links: { aihot: storyUrl(s.public_id) },
       reports: reports.slice(0, 50).map((r) => ({
         id: r.id,

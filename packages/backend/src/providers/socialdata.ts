@@ -105,8 +105,15 @@ export async function searchTweets(query: string, opts: { purpose: string; subje
   return { tweets: json.tweets ?? [], nextCursor: json.next_cursor ?? null, receiptId: receipt.receiptId, reused: receipt.reused };
 }
 
+/** The provider escapes these three plain-text characters. One pass preserves literal entity text. */
+function decodeTweetEntities(text: string): string {
+  const entities: Record<string, string> = { "&amp;": "&", "&lt;": "<", "&gt;": ">" };
+  return text.replace(/&(?:amp|lt|gt);/g, entity => entities[entity]!);
+}
+
 export function tweetText(t: SdTweet): string {
-  let text = t.full_text ?? t.text ?? "";
+  // Decode before inserting expanded URLs: literal code and destination URLs keep their own bytes.
+  let text = decodeTweetEntities(t.full_text ?? t.text ?? "");
   // Expand t.co links and drop trailing media links.
   for (const u of t.entities?.urls ?? []) text = text.replaceAll(u.url, u.expanded_url);
   for (const m of t.extended_entities?.media ?? t.entities?.media ?? []) text = text.replace(/\s*https:\/\/t\.co\/\w+\s*$/, "");

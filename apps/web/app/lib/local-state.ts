@@ -1,6 +1,6 @@
-// Reader state kept only in this browser, and the site's one guarded way to browser storage; nothing
-// about a reader leaves it. Keep the keys and formats once readers have data under them. Storage
-// failures degrade silently.
+// Reader state kept only in this browser, and the site's one guarded way to browser storage. Keep the
+// keys and formats once readers have data under them: existing readers' data must stay readable as-is.
+// Storage failures degrade silently.
 import { useEffect, useSyncExternalStore } from "react";
 import { beijingDate } from "@aihot/contracts/time";
 
@@ -43,7 +43,7 @@ function storage(kind: StorageKind): Storage | null {
 }
 
 /** A stored string; null when it is missing or storage is unavailable. */
-function readRaw(key: string, kind: StorageKind = "local"): string | null {
+export function readRaw(key: string, kind: StorageKind = "local"): string | null {
   try {
     return storage(kind)?.getItem(key) ?? null;
   } catch {
@@ -433,6 +433,9 @@ function mergeLocalData(incoming: { starred: unknown[]; read: unknown[]; theme: 
     return { starredAdded: accepted.length, starredSkipped, readAdded: readFailed ? 0 : Math.min(readAdditions.length, readRoom), readSkipped, themeApplied, readFailed };
   });
 }
+
+/** Imports from elsewhere (the site's modules') merge through the same path. */
+export { mergeLocalData };
 
 // React hooks
 const EMPTY_STARRED: LocalStarredItem[] = [];

@@ -1,13 +1,14 @@
 // Item detail and Markdown export, both behind the same visibility and licence rules.
 import type { OutlineEntry, SiteItemDetail, StoryRef } from "@aihot/contracts/site";
-import { SITE } from "@aihot/industry/site";
+import { ITEM_COPY, SITE } from "@aihot/site";
 import { bodyToMarkdown } from "../content/markdown.ts";
 import { sql } from "../db.ts";
+import { stripTagMarkup } from "../lib/text.ts";
 import { proxyBodyImages } from "../media/imgproxy.ts";
 import { textToHtml } from "../content/sanitize.ts";
-import { exportTranslation, isChineseBody, ITEM_COLUMNS, ITEM_FROM, seatHolders, toItemSummary, showcaseView, xView, type ItemRow } from "./items.ts";
-import { listedCondition } from "./scope.ts";
-import { itemUrl } from "./links.ts";
+import { exportTranslation, isChineseBody, ITEM_COLUMNS, ITEM_FROM, seatHolders, showsPost, toItemSummary, showcaseView, xView, type ItemRow } from "./items.ts";
+import { evidenceCondition, listedCondition } from "./scope.ts";
+import { itemUrl, siteUrl } from "./links.ts";
 import { hasItemPage, publicSourceName } from "./rules.ts";
 import { topicLinks, topicMembership } from "./topics.ts";
 
@@ -31,7 +32,7 @@ function withOutline(html: string): { html: string; outline: OutlineEntry[] } {
   const out = html.replace(/<h([2-4])(?: id="sec-\d+")?>([\s\S]*?)<\/h\1>/gi, (_m, level: string, inner: string) => {
     n += 1;
     const id = `sec-${n}`;
-    const text = inner.replace(/<[^>]+>/g, "").trim();
+    const text = stripTagMarkup(inner, "").trim();
     if (text) outline.push({ id, text: text.slice(0, 80), level: Number(level) });
     return `<h${level} id="${id}">${inner}</h${level}>`;
   });
@@ -83,6 +84,10 @@ export async function loadItemDetail(id: string, language: "zh" | "original" = "
   if (row.visibility === "summary-only") {
     const item: SiteItemDetail = {
       ...summary,
+      selected: false,
+      score: null,
+      category: null,
+      story: null,
       reason: null,
       tags: [],
       x: null,
@@ -105,16 +110,15 @@ export async function loadItemDetail(id: string, language: "zh" | "original" = "
     SELECT DISTINCT st.public_id::text AS "publicId", st.title
     FROM fact_articles fa JOIN facts f ON f.id = fa.fact_id JOIN stories st ON st.id = f.story_id
     WHERE fa.article_id = ${id} AND fa.role <> 'mention' AND st.merged_into IS NULL
-    LIMIT 6`;
+    ORDER BY "publicId" LIMIT 6`;
 
   let x: SiteItemDetail["x"] = null;
   let reading: Pick<SiteItemDetail, "body" | "outline" | "hasTranslation" | "bodyLanguage"> = { body: null, outline: [], hasTranslation: false, bodyLanguage: "original" };
-  // An X post's own text and media are its body: shown only where the source allows full text.
-  if (row.channel === "x" && row.body_mode === "full") {
+  if (showsPost(row)) {
     const post = xView(row, false, true);
     const text = String(row.x_post?.text ?? row.body_text ?? "");
     // A post's text is sent as written: its headings make the outline, without anchors.
-    reading = readingBody(language, post?.translation ? { html: textToHtml(post.translation), kind: "translation" } : null, text ? textToHtml(text) : null, true,
+    if (post?.translation || text.trim()) reading = readingBody(language, post?.translation ? { html: textToHtml(post.translation), kind: "translation" } : null, text.trim() ? textToHtml(text) : null, true,
       (html) => ({ html, outline: withOutline(html).outline }));
     if (post) {
       const { text: _text, translation: _translation, ...shown } = post;
@@ -130,8 +134,8 @@ export async function loadItemDetail(id: string, language: "zh" | "original" = "
   if (row.fact_id) {
     const [g] = await sql<{ public_id: string; reports: number; sources: number }[]>`
       SELECT f.public_id, count(p.article_id) AS reports, count(DISTINCT p.source_id) AS sources
-      FROM facts f JOIN publications p ON p.fact_id = f.id
-      WHERE f.id = ${row.fact_id} AND ${listedCondition(now)}
+      FROM facts f JOIN fact_articles fa ON fa.fact_id = f.id JOIN publications p ON p.article_id = fa.article_id
+      WHERE f.id = ${row.fact_id} AND ${evidenceCondition()} AND ${listedCondition(now)}
       GROUP BY f.public_id`;
     if (g) {
       group = {
@@ -165,13 +169,13 @@ export async function loadItemDetail(id: string, language: "zh" | "original" = "
 
 /**
  * Same predicate for the export button and the export route: a public page with something to export
- * (a summary, or a post or body whose full text may be shown).
+ * (a summary, the post where pages show it, or a full-text body).
  */
 export function markdownAvailable(row: {
   visibility: string; source_mode: string; summary: string | null; body_mode: string; body_html?: string | null; channel: string; x_post: Record<string, any> | null;
 }): boolean {
   if (row.visibility !== "public" || !hasItemPage({ visibility: row.visibility, sourceMode: row.source_mode })) return false;
-  return !!row.summary || (row.body_mode === "full" && ((row.channel === "x" && !!row.x_post?.text) || !!row.body_html));
+  return !!row.summary || (showsPost(row) && (!!row.x_post?.text || !!row.x_post?.media?.length || !!row.x_post?.quoted?.text)) || (row.body_mode === "full" && !!row.body_html);
 }
 
 export async function exportMarkdown(id: string): Promise<{ filename: string; body: string } | null> {
@@ -183,17 +187,23 @@ export async function exportMarkdown(id: string): Promise<{ filename: string; bo
   const showcase = showcaseView(row);
   if (showcase) lines.push(`- GitHub：⭐ ${showcase.stars}（Fork ${showcase.forks ?? "—"}${showcase.language ? ` · ${showcase.language}` : ""}）`);
   lines.push(`- 来源：${publicSourceName(row.source_name)}`);
-  lines.push(`- 发布时间：${(row.published_at ?? row.discovered_at).toISOString()}`);
+  // Without a reliable date from the original, the time it was collected says so.
+  lines.push(row.published_at ? `- 发布时间：${row.published_at.toISOString()}` : `- 收录时间：${row.discovered_at.toISOString()}`);
   lines.push(`- ${SITE.name}：${itemUrl(row.id)}`);
   lines.push(`- 原文：${row.url}`, "");
   if (row.summary) lines.push("## 摘要", "", row.summary, "");
-  if (row.selected && row.seat && row.reason) lines.push("## 推荐理由", "", row.reason, "");
-  if (row.channel === "x" && row.body_mode === "full" && row.x_post?.text) {
-    lines.push("## 正文", "", String(row.x_post.text), "");
-    if (row.zh_text) lines.push("## 中文译文", "", row.zh_text, "");
-    const q = row.x_post.quoted as { handle?: string; text?: string; url?: string } | null | undefined;
+  if (row.selected && row.seat && row.reason) lines.push(`## ${ITEM_COPY.reasonLabel}`, "", row.reason, "");
+  if (showsPost(row) && row.x_post) {
+    const post = xView(row);
+    if (post?.text) lines.push("## 正文", "", post.text, "");
+    if (post?.translation) lines.push("## 中文译文", "", post.translation, "");
+    for (const media of post?.media ?? []) {
+      const url = media.url.startsWith("/") ? siteUrl(media.url) : media.url;
+      lines.push(media.kind === "image" ? `![${media.alt ?? ""}](${url})` : `[视频](${url})`, "");
+    }
+    const q = post?.quoted;
     if (q?.text) lines.push(`## 引用 @${q.handle ?? ""}`, "", ...String(q.text).split("\n").map((l) => `> ${l}`), "", ...(q.url ? [q.url, ""] : []));
-    if (q?.text && row.quoted_zh) lines.push("### 引用中文译文", "", ...row.quoted_zh.split("\n").map((l) => `> ${l}`), "");
+    if (q?.text && q.translation) lines.push("### 引用中文译文", "", ...q.translation.split("\n").map((l) => `> ${l}`), "");
   } else if (row.body_mode === "full" && row.body_html) {
     const translation = exportTranslation(row);
     if (translation) lines.push("## 正文 · 中文译文", "", bodyToMarkdown(translation, row.url), "");

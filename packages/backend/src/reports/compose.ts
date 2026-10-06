@@ -4,19 +4,21 @@
 // dailies and a model only writes its overview and introductions, from the brief in the industry pack
 // (industry/prompts/report-period*.md).
 import { z } from "zod";
-import { SITE } from "@aihot/industry/site";
+import { EDITION_TIMES, REPORTS, SITE } from "@aihot/site";
 import { PLAIN_TERMS, RELEASE } from "@aihot/industry/taxonomy";
 import { promptText, promptVersion } from "../editorial/prompts.ts";
 import { modelFor } from "../editorial/models.ts";
 import { ENTITIES, isRelease } from "../editorial/vocabulary.ts";
-import { addDays, beijingDate, beijingMidnight, isoWeekLabel, isoWeekRange, monthRange } from "@aihot/contracts/time";
+import { addDays, beijingAt, beijingDate, beijingTime, isoWeekLabel, isoWeekRange, monthRange } from "@aihot/contracts/time";
 import { sql } from "../db.ts";
+import { logError } from "../lib/log-error.ts";
 import { chatJson } from "../providers/llm.ts";
 import { completeReceipt } from "../providers/receipts.ts";
 import { shutdownSignal } from "../jobs/queue.ts";
+import { emit } from "../modules.ts";
 import { arrangeDaily, candidates, dailyEdition, periodEntries, sectionOf, SECTION_ORDER, type Candidate, type EditionEntry } from "./edition.ts";
 
-export const REPORT_VERSION = promptVersion("report-period", "report-period-sections");
+export const REPORT_VERSION = promptVersion("report-period", "report-period-sections", "report-period-no-sections");
 
 /**
  * The masthead's figures, counted in events: sources over every report its entries cite; releases
@@ -46,13 +48,14 @@ async function savedReport(kind: ReportKind, key: string) {
 /**
  * Without a reason (the scheduled run) only a missing issue is written: one already published stays as
  * it is. With a reason (an explicit regeneration) the issue is replaced and the edition it replaces is
- * kept as a revision.
+ * kept as a revision. Says whether the issue was written.
  */
-async function saveReport(kind: ReportKind, key: string, start: Date, end: Date, content: Record<string, unknown>, reason: string | undefined, model: string | null, receiptIds: number[]) {
-  await sql.begin(async (tx) => {
-    const insert = () => tx`INSERT INTO reports (kind, key, window_start, window_end, content, generated_at, model, origin)
-      VALUES (${kind}, ${key}, ${start}, ${end}, ${tx.json(content as never)}, now(), ${model}, 'model') ON CONFLICT (kind, key) DO NOTHING`;
-    if (reason === undefined) await insert();
+async function saveReport(kind: ReportKind, key: string, start: Date, end: Date, content: Record<string, unknown>, reason: string | undefined, model: string | null, receiptIds: number[]): Promise<boolean> {
+  return sql.begin(async (tx) => {
+    const insert = async () => (await tx`INSERT INTO reports (kind, key, window_start, window_end, content, generated_at, model, origin)
+      VALUES (${kind}, ${key}, ${start}, ${end}, ${tx.json(content as never)}, now(), ${model}, 'model') ON CONFLICT (kind, key) DO NOTHING`).count > 0;
+    let written: boolean;
+    if (reason === undefined) written = await insert();
     else {
       const [existing] = await tx<{ id: number; revision: number; content: unknown; generated_at: Date }[]>`
         SELECT id, revision, content, generated_at FROM reports WHERE kind = ${kind} AND key = ${key} FOR UPDATE`;
@@ -61,30 +64,44 @@ async function saveReport(kind: ReportKind, key: string, start: Date, end: Date,
                  VALUES (${existing.id}, ${existing.revision}, ${tx.json(existing.content as never)}, ${existing.generated_at}, ${reason}) ON CONFLICT DO NOTHING`;
         await tx`UPDATE reports SET content = ${tx.json(content as never)}, window_start = ${start}, window_end = ${end}, generated_at = now(),
                    model = ${model}, revision = revision + 1, origin = 'model', updated_at = now() WHERE id = ${existing.id}`;
-      } else await insert();
+        written = true;
+      } else written = await insert();
     }
+    // A new issue changes the latest page, the archive, its neighbours' navigation and the report feeds.
+    if (written) await emit("reportsChanged", { reason: `${kind} ${key} published` }, tx);
     for (const id of receiptIds) await completeReceipt(tx, id);
+    return written;
   });
 }
 
+/** "10 月 4 日 08:00": one end of a quiet issue's window, as its lead paragraph names it. */
+function windowPoint(at: Date): string {
+  const day = beijingDate(at);
+  return `${Number(day.slice(5, 7))} 月 ${Number(day.slice(8, 10))} 日 ${beijingTime(at)}`;
+}
+
 /**
- * Daily report for Beijing date D covers [D-1 08:00, D 08:00) Beijing time. Its most important entry
- * leads, in its own words, and the next three are today's highlights.
+ * Daily report for Beijing date D covers the 24 hours up to the site's edition time on D (EDITION_TIMES).
+ * Its most important entry leads, in its own words, and the next three are today's highlights. A window
+ * the editors judged with nothing new in it still has its issue: no entries, and a lead that says so
+ * (REPORTS.quiet).
  */
 export async function composeDaily(date: string, reason?: string): Promise<{ key: string; entries: number }> {
   const previous = await savedReport("daily", date);
   if (previous && reason === undefined) return { key: date, entries: previous.entries };
-  const end = new Date(beijingMidnight(date).getTime() + 8 * 3600 * 1000);
+  const end = beijingAt(date, EDITION_TIMES.daily);
   const start = new Date(end.getTime() - 86400000);
   const edition = await dailyEdition(date, start, end);
-  // An issue with nothing in it is a failure upstream, not a report: the run fails and is caught up later.
-  if (edition.entries.length === 0) throw new Error(`daily ${date}: no selected items in its window`);
+  // Nothing judged in the window is a failure upstream, not a quiet day: the run fails and is caught up later.
+  if (edition.entries.length === 0 && edition.stats.judgedReports === 0) throw new Error(`daily ${date}: nothing judged in its window`);
   const issue = arrangeDaily(edition.entries);
-  const [lead, ...rest] = issue.main as [EditionEntry, ...EditionEntry[]];
+  const [lead, ...rest] = issue.main;
   const content = {
     date,
-    lead: { title: lead.entry.title, leadParagraph: lead.entry.summary },
-    leadItemId: lead.entry.itemId,
+    lead: lead
+      ? { title: lead.entry.title, leadParagraph: lead.entry.summary }
+      : { title: REPORTS.quiet.title, leadParagraph: REPORTS.quiet.paragraph.replace("{start}", windowPoint(start)).replace("{end}", windowPoint(end)) },
+    leadItemId: lead?.entry.itemId ?? null,
     highlights: rest.slice(0, 3).map((e) => e.entry.itemId),
     sections: SECTION_ORDER
       .map((label) => ({ label, items: issue.main.filter((e) => sectionOf(e.category) === label).map((e) => e.entry) }))
@@ -128,7 +145,7 @@ export function periodPrompt(kind: "weekly" | "monthly", startDate: string, endD
   return {
     system: promptText("report-period", {
       ...BRIEF[kind],
-      sections: introduced.length ? promptText("report-period-sections", { columns: introduced.map((l) => `「${l}」`).join("") }) : "",
+      sections: introduced.length ? promptText("report-period-sections", { columns: introduced.map((l) => `「${l}」`).join("") }) : promptText("report-period-no-sections"),
       sectionsExample: introduced.length ? `{"${introduced[0]}": "..."}` : "{}",
     }),
     user: `本期：${startDate} 至 ${endDateInclusive}\n${list}`,
@@ -176,9 +193,9 @@ export function fitted(text: string, max: number): string | null {
 async function composePeriod(kind: "weekly" | "monthly", key: string, startDate: string, endDateInclusive: string, reason: string | undefined) {
   const previous = await savedReport(kind, key);
   if (previous && reason === undefined) return { key, entries: previous.entries };
-  // The dailies' windows run from 08:00 the day before the first to 08:00 on the last.
-  const start = new Date(beijingMidnight(startDate).getTime() - 16 * 3600 * 1000);
-  const end = new Date(beijingMidnight(endDateInclusive).getTime() + 8 * 3600 * 1000);
+  // The dailies' windows run from the edition time the day before the first to that time on the last.
+  const start = beijingAt(addDays(startDate, -1), EDITION_TIMES.daily);
+  const end = beijingAt(endDateInclusive, EDITION_TIMES.daily);
   const { entries, issues } = await periodEntries(startDate, endDateInclusive);
   const top = entries.slice(0, PERIOD_EVENTS[kind]);
   if (!top.length) throw new Error(`${kind} ${key}: no daily entries in the period`);
@@ -199,7 +216,7 @@ async function composePeriod(kind: "weekly" | "monthly", key: string, startDate:
     receiptId = res.receiptId;
   } catch (error) {
     if (shutdownSignal.signal.aborted) throw error;
-    console.error(JSON.stringify({ level: "warn", msg: "period writer failed; the issue goes out with its plain overview", report: `${kind}:${key}`, error: String(error).slice(0, 300) }));
+    console.error(JSON.stringify({ level: "warn", msg: "period writer failed; the issue goes out with its plain overview", report: `${kind}:${key}`, error: logError(error) }));
   }
   const usable = (text: string | undefined, max: number) => {
     const fit = fitted(text ?? "", max);
@@ -240,30 +257,24 @@ export async function composeMonthly(label: string, reason?: string) {
   return composePeriod("monthly", label, range.start, range.end, reason);
 }
 
-const bjParts = (now: Date) => {
-  const iso = new Date(now.getTime() + 8 * 3600000).toISOString();
-  return { hour: Number(iso.slice(11, 13)), minute: Number(iso.slice(14, 16)) };
-};
-
-/** The newest daily due by `now`: today's from 08:00 Beijing time, yesterday's before. */
+/** The newest daily due by `now`: today's from its edition time (Beijing), yesterday's before. */
 export function dueDaily(now = new Date()): string {
   const today = beijingDate(now);
-  return bjParts(now).hour >= 8 ? today : addDays(today, -1);
+  return beijingTime(now) >= EDITION_TIMES.daily ? today : addDays(today, -1);
 }
 
-/** The newest weekly due by `now`: the last complete ISO week from Monday 10:00, the one before until then. */
+/** The newest weekly due by `now`: the last complete ISO week from its edition time on Monday, the one before until then. */
 export function dueWeekly(now = new Date()): string {
   const today = beijingDate(now);
   const dow = (new Date(`${today}T00:00:00Z`).getUTCDay() + 6) % 7;
-  const due = dow > 0 || bjParts(now).hour >= 10;
+  const due = dow > 0 || beijingTime(now) >= EDITION_TIMES.weekly;
   return isoWeekLabel(addDays(today, -dow - (due ? 7 : 14)));
 }
 
-/** The newest monthly due by `now`: the last complete month from the 1st 10:30, the one before until then. */
+/** The newest monthly due by `now`: the last complete month from its edition time on the 1st, the one before until then. */
 export function dueMonthly(now = new Date()): string {
   const [y, m, d] = beijingDate(now).split("-").map(Number) as [number, number, number];
-  const { hour, minute } = bjParts(now);
-  const due = d > 1 || hour > 10 || (hour === 10 && minute >= 30);
+  const due = d > 1 || beijingTime(now) >= EDITION_TIMES.monthly;
   const back = due ? 1 : 2;
   const month = (y * 12 + (m - 1) - back);
   return `${Math.floor(month / 12)}-${String((month % 12) + 1).padStart(2, "0")}`;
@@ -338,7 +349,7 @@ export async function composeDueReports(now = new Date(), limit = 8): Promise<{ 
         const count = (failure?.count ?? 0) + 1;
         failures[failKey] = { count, lastAt: new Date(now).toISOString() };
         failuresChanged = true;
-        console.error(JSON.stringify({ level: "error", msg: count >= COMPOSE_MAX_ATTEMPTS ? "report given up" : "report failed", report: `${k.kind}:${key}`, attempts: count, error: String(error).slice(0, 300) }));
+        console.error(JSON.stringify({ level: "error", msg: count >= COMPOSE_MAX_ATTEMPTS ? "report given up" : "report failed", report: `${k.kind}:${key}`, attempts: count, error: logError(error) }));
       }
     }
   }

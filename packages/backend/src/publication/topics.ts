@@ -2,24 +2,19 @@
 // pack (industry/topics.json) and read from there when the process starts. Which reports a topic takes
 // is one SQL predicate, `membership`: a direction or a form takes its tags; a company takes the reports
 // it is a subject of, but not those that only mention it — among several subject companies, its name must
-// appear in the Chinese or the original title. Lists, counts and the chronicle read the selected set
-// one report per fact, as v1 and RSS do.
-import type { LbBrand } from "@aihot/contracts/leaderboard";
+// appear in the Chinese or the original title. Lists and counts read the selected set one report per
+// fact, as v1 and RSS do.
 import type { CategoryKey } from "@aihot/contracts/taxonomy";
 import type {
-  TopicGroup, TopicGroupKey, TopicLink, TopicPage, TopicSummary, TopicsResponse,
+  Brand, TopicGroup, TopicGroupKey, TopicLink, TopicPage, TopicSummary, TopicsResponse,
 } from "@aihot/contracts/site";
-import { FEATURES } from "@aihot/industry/features";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { REPO_ROOT } from "../config.ts";
 import { sql } from "../db.ts";
 import { ENTITIES } from "../editorial/vocabulary.ts";
-import { providerMark } from "../leaderboard/read.ts";
 import { cached, type Cached } from "../lib/cache.ts";
-import { companyMilestones, curatedChronicle } from "./chronicles.ts";
-import { CHRONICLE_KINDS, chronicleReadReports, selectTopicChronicle, selectTopicHighlights, type ChronicleReport } from "./topic-chronicle.ts";
-import { factSources } from "./coverage.ts";
+import { serverModules } from "../modules.ts";
 import { ITEM_COLUMNS, ITEM_FROM, toFeedItemSummary, type ItemRow } from "./items.ts";
 import { evidenceCondition, listedCondition, ownFactEvidenceCondition, seatedCondition, selectedCondition, storyReportCondition } from "./scope.ts";
 
@@ -30,23 +25,19 @@ export interface Topic {
   definition: string;
   /** Companies: the subject id (industry/taxonomy.ts ENTITIES). */
   entityId: string | null;
-  /** Companies: the provider slug of its models on the leaderboard. */
-  provider: string | null;
   /** Tags that put a report in the topic: a company's subject tag, a direction's or a form's tags. */
   tags: string[];
   /** Companies: a title naming the company by any of its names (a PostgreSQL regular expression). */
   pattern: string | null;
   /** Companies: what a whole search query may call it. */
   aliases: string[];
-  /** Directions: a milestone's title uses one of these words (topic-chronicle.ts). */
-  terms: RegExp | null;
-  /** Companies: the names its own announcements open with, left out of its chronicle's labels. */
-  orgNames: string[];
 }
 
 interface TopicFile {
   groups: TopicGroup[];
-  topics: Array<{ slug: string; name: string; group: TopicGroupKey; entityId?: string; leaderboardProvider?: string; aliases?: string[]; tags?: string[]; chronicleTerms?: string[]; orgNames?: string[]; definition: string }>;
+  topics: Array<{
+    slug: string; name: string; group: TopicGroupKey; entityId?: string; aliases?: string[]; tags?: string[]; definition: string;
+  }>;
 }
 
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -59,12 +50,6 @@ function titlePattern(name: string, entityId: string): string {
   return `(?<![A-Za-z])(${[...names].map(escape).join("|")})(?![A-Za-z])`;
 }
 
-/** Any of the words, a Latin one at the start of a word, and a whole word when it has three letters or fewer. */
-function termPattern(words: string[]): RegExp {
-  const part = (w: string) => !/^[A-Za-z]/.test(w) ? escape(w) : `(?<![A-Za-z])${escape(w)}${w.length <= 3 ? "(?![A-Za-z])" : ""}`;
-  return new RegExp(words.map(part).join("|"), "i");
-}
-
 const file = JSON.parse(readFileSync(path.join(REPO_ROOT, "industry/topics.json"), "utf8")) as TopicFile;
 
 export const TOPIC_GROUPS: TopicGroup[] = file.groups;
@@ -75,12 +60,9 @@ export const TOPICS: Topic[] = file.topics.map((t) => ({
   group: t.group,
   definition: t.definition,
   entityId: t.entityId ?? null,
-  provider: t.leaderboardProvider ?? null,
   tags: t.entityId ? [`entity:${t.entityId}`] : (t.tags ?? []),
   pattern: t.entityId ? titlePattern(t.name, t.entityId) : null,
   aliases: t.entityId ? [t.slug, t.name, ...nameParts(t.name), ...(t.aliases ?? [])] : [],
-  terms: t.chronicleTerms?.length ? termPattern(t.chronicleTerms) : null,
-  orgNames: t.orgNames ?? [],
 }));
 
 const BY_SLUG = new Map(TOPICS.map((t, position) => [t.slug, { topic: t, position }]));
@@ -95,6 +77,17 @@ export function topicLinks(slugs: string[]): TopicLink[] {
   return slugs.map((s) => findTopic(s)).filter((t): t is Topic => !!t).map((t) => ({ slug: t.slug, name: t.name }));
 }
 
+/** Stable browse links in the same order as the topic directory, without its counts or modules. */
+export function topicBrowseLinks() {
+  return TOPICS.map(({ slug, name, group }) => ({ slug, name, group }));
+}
+
+/** One membership rule for topic discovery and a single topic's page and count. */
+function topicMatch(tags: ReturnType<typeof sql>, pattern: ReturnType<typeof sql>) {
+  return sql`p.tags && ${tags} AND (${pattern} IS NULL OR p.title ~* ${pattern} OR coalesce(p.original_title, '') ~* ${pattern}
+    OR (SELECT count(*) FROM unnest(p.tags) AS e(tag) WHERE e.tag LIKE 'entity:%') = 1)`;
+}
+
 /**
  * The topics report `p` belongs to, in topic order: its tags meet the topic's and, for a company, the
  * title names it or it is the report's only subject company.
@@ -103,26 +96,47 @@ export function topicMembership(topics: Topic[] = TOPICS) {
   const rows = topics.map((t) => ({ slug: t.slug, tags: t.tags, pattern: t.pattern, position: position(t.slug) }));
   return sql`ARRAY(
     SELECT t.slug FROM jsonb_to_recordset(${sql.json(rows)}::jsonb) AS t(slug text, tags text[], pattern text, position int)
-    WHERE p.tags && t.tags AND (t.pattern IS NULL OR p.title ~* t.pattern OR coalesce(p.original_title, '') ~* t.pattern
-      OR (SELECT count(*) FROM unnest(p.tags) AS e(tag) WHERE e.tag LIKE 'entity:%') = 1)
+    WHERE ${topicMatch(sql`t.tags`, sql`t.pattern`)}
     ORDER BY t.position)`;
 }
 
 /** Report `p` is in topic `t`; the tag overlap comes first, for the tags index. */
 function inTopic(t: Topic) {
-  return sql`p.tags && ${t.tags}::text[] AND ${t.slug} = ANY(${topicMembership([t])})`;
+  const pattern: ReturnType<typeof sql> = t.pattern === null ? sql`NULL::text` : sql`${t.pattern}::text`;
+  return topicMatch(sql`${t.tags}::text[]`, pattern);
 }
 
 // ---------------------------------------------------------------------------------------------------
 // The selected set by topic, read in one pass and kept a minute (counts may lag by that much; the
 // rows of a page are checked again when read).
 
-interface Seat extends Omit<ChronicleReport, "timelineAt" | "topicSlugs" | "storyPublicId" | "sourceCount"> {
+/** A selected report in the topic index: the facts about it that the topic pages and their modules' parts read. */
+export interface TopicMember {
+  id: string;
   at: Date;
   /** When the selected report became visible. */
   released: Date;
-  story: string | null;
+  title: string;
+  /** The topics it belongs to, in topic order. */
   topics: string[];
+  originalTitle: string | null;
+  category: CategoryKey | null;
+  tags: string[];
+  score: number | null;
+  publishedAt: Date | null;
+  /** Its source is a first-party one. */
+  firstParty: boolean;
+  /** The fact it reports, and that fact's subject, action and date when known. */
+  factId: number | null;
+  factSubject: string | null;
+  factAction: string | null;
+  factOccurredAt: Date | null;
+  /** Earliest currently public selected evidence of the same fact, including replaced representatives. */
+  factPublishedAt: Date | null;
+  /** Whether its analysis found one event or several ("composite"). */
+  scope: string | null;
+  /** Its public story's id, when it belongs to one. */
+  story: string | null;
 }
 
 interface SeatRow {
@@ -137,7 +151,6 @@ interface SeatRow {
   score: number | null;
   first_party: boolean;
   category: CategoryKey | null;
-  owner: string | null;
   fact_id: number | null;
   fact_subject: string | null;
   fact_action: string | null;
@@ -150,17 +163,17 @@ interface SeatRow {
 interface TopicIndex {
   at: Date;
   /** Each topic's reports, newest first. */
-  bySlug: Map<string, Seat[]>;
-  /** Editorial sources that reported each fact. */
-  sources: Map<number, number>;
+  bySlug: Map<string, TopicMember[]>;
+  /** What each module's part of the topic pages computed with the index, by the module's name. */
+  modules: Map<string, unknown>;
 }
 
 /** The full index or a bounded set of its candidates, with their current content and membership. */
-async function readSeats(now: Date, ids?: string[], topics: Topic[] = TOPICS): Promise<Seat[]> {
+async function readSeats(now: Date, ids?: string[], topics: Topic[] = TOPICS): Promise<TopicMember[]> {
   const rows = await sql<SeatRow[]>`
     WITH seats AS (
       SELECT p.article_id AS id, p.timeline_at AS at, p.visible_after AS released, p.title, p.score, (s.tier = 'T1') AS first_party,
-        p.category, p.original_title, p.published_at, p.tags, s.owner_entity_id AS owner, p.fact_id,
+        p.category, p.original_title, p.published_at, p.tags, p.fact_id,
         f.subject AS fact_subject, f.action AS fact_action, f.occurred_at AS fact_occurred_at, a.output->>'scope' AS scope,
         st.public_id::text AS story, ${topicMembership(topics)} AS topics
       FROM publications p JOIN sources s ON s.id = p.source_id
@@ -178,26 +191,22 @@ async function readSeats(now: Date, ids?: string[], topics: Topic[] = TOPICS): P
     SELECT seats.*, dates.fact_published_at FROM seats LEFT JOIN dates ON dates.fact_id = seats.fact_id
     ORDER BY seats.at DESC, seats.id DESC`;
   return rows.map((r) => ({
-    id: r.id, at: r.at, released: r.released, title: r.title, score: r.score, firstParty: r.first_party, category: r.category, owner: r.owner,
-    factId: r.fact_id, story: r.story, topics: r.topics, originalTitle: r.original_title, publishedAt: r.published_at, factPublishedAt: r.fact_published_at, tags: r.tags,
+    id: r.id, at: r.at, released: r.released, title: r.title, topics: r.topics,
+    score: r.score, firstParty: r.first_party, category: r.category, factId: r.fact_id, story: r.story,
+    originalTitle: r.original_title, publishedAt: r.published_at, factPublishedAt: r.fact_published_at, tags: r.tags,
     factSubject: r.fact_subject, factAction: r.fact_action, factOccurredAt: r.fact_occurred_at, scope: r.scope,
   }));
 }
 
 async function readIndex(now: Date): Promise<TopicIndex> {
-  const seats = await readSeats(now);
-  const bySlug = new Map(TOPICS.map((t) => [t.slug, [] as Seat[]]));
-  const facts = new Set<number>();
-  for (const seat of seats) {
-    if (seat.topics.length === 0) continue;
-    for (const slug of seat.topics) bySlug.get(slug)?.push(seat);
-    if (seat.factId !== null) facts.add(seat.factId);
-  }
-  const sources = new Map([...(await factSources([...facts], now))].map(([id, list]) => [id, list.length]));
-  return { at: now, bySlug, sources };
+  const members = (await readSeats(now)).filter((seat) => seat.topics.length > 0);
+  const bySlug = new Map(TOPICS.map((t) => [t.slug, [] as TopicMember[]]));
+  for (const seat of members) for (const slug of seat.topics) bySlug.get(slug)?.push(seat);
+  const parts = serverModules().flatMap((m) => (m.topics?.page?.index ? [{ name: m.name, index: m.topics.page.index }] : []));
+  return { at: now, bySlug, modules: new Map(await Promise.all(parts.map(async (p) => [p.name, await p.index(members, now)] as const))) };
 }
 
-const indexCache = cached(() => readIndex(new Date()), { freshMs: 60_000, maxStaleMs: 10 * 60_000 });
+const indexCache = cached(() => readIndex(new Date()), { freshMs: 60_000, maxStaleMs: 60_000 });
 
 /** A given `now` reads afresh (tests, a clock other than this minute's). */
 const topicIndex = (now?: Date) => (now ? readIndex(now) : indexCache.get());
@@ -206,17 +215,22 @@ const DAY = 86400_000;
 const RECENT_DAYS = 30;
 export const TOPIC_PAGE_SIZE = 20;
 
-/**
- * Every company's mark: that of its best model on the leaderboard (when the site has one), or its
- * initial when it has none there.
- */
-async function companyBrands(): Promise<Map<string, LbBrand>> {
+/** A company's initial, drawn as its mark. */
+const monogram = (t: Topic): Brand => ({ src: null, monogram: t.name.replace(/[^\p{L}\p{N}]/gu, "").slice(0, 1).toUpperCase(), raster: false });
+
+/** Every company's mark, by its topic's slug. */
+async function companyBrands(): Promise<Map<string, Brand>> {
   const companies = TOPICS.filter((t) => t.group === "company");
-  const marks = await Promise.all(companies.map((t) => (FEATURES.leaderboard && t.provider ? providerMark(t.provider) : null)));
-  return new Map(companies.map((t, i) => [t.slug, marks[i] ?? { src: null, monogram: t.name.replace(/[^\p{L}\p{N}]/gu, "").slice(0, 1).toUpperCase(), raster: false }]));
+  const brands = new Map<string, Brand>(companies.map((t) => [t.slug, monogram(t)]));
+  // The modules' marks over the monograms.
+  for (const m of serverModules()) {
+    if (!m.topics?.marks) continue;
+    for (const [slug, mark] of Object.entries(await m.topics.marks())) if (brands.has(slug)) brands.set(slug, mark);
+  }
+  return brands;
 }
 
-const recentCount = (seats: Seat[], now: Date) => seats.filter((s) => s.at.getTime() > now.getTime() - RECENT_DAYS * DAY).length;
+const recentCount = (seats: TopicMember[], now: Date) => seats.filter((s) => s.at.getTime() > now.getTime() - RECENT_DAYS * DAY).length;
 
 /** Thin topics keep their page but stay out of the sitemap and search engines. */
 const isIndexable = (total: number, recent: number) => total >= 50 || (total >= 20 && recent > 0);
@@ -225,15 +239,15 @@ const isIndexable = (total: number, recent: number) => total >= 50 || (total >= 
 const LATEST_CANDIDATES = 3;
 
 /**
- * Recheck only the reports a page may name: withdrawals and corrections take effect even while
- * counts are cached, including the title, membership and fields that decide chronicle eligibility.
+ * Recheck only the reports a page may name: withdrawals and corrections, including the title and
+ * membership, take effect even while counts are cached.
  */
-async function currentSeats(ids: string[], now: Date, topics: Topic[] = TOPICS): Promise<Map<string, Seat>> {
+async function currentSeats(ids: string[], now: Date, topics: Topic[] = TOPICS): Promise<Map<string, TopicMember>> {
   if (ids.length === 0) return new Map();
   return new Map((await readSeats(now, ids, topics)).map((s) => [s.id, s]));
 }
 
-function summarize(t: Topic, seats: Seat[], now: Date, brands: Map<string, LbBrand>, live: Map<string, Seat>): TopicSummary {
+function summarize(t: Topic, seats: TopicMember[], now: Date, brands: Map<string, Brand>, live: Map<string, TopicMember>): TopicSummary {
   const recent = recentCount(seats, now);
   const latest = seats.slice(0, LATEST_CANDIDATES).map((s) => live.get(s.id)).find((s) => s?.topics.includes(t.slug));
   return {
@@ -264,8 +278,8 @@ export interface TopicCount {
 }
 
 /** For the sitemap and IndexNow: every topic's pages and when they last changed. */
-export async function topicPageCounts(): Promise<TopicCount[]> {
-  const index = await topicIndex();
+export async function topicPageCounts(now?: Date): Promise<TopicCount[]> {
+  const index = await topicIndex(now);
   return TOPICS.map((t) => {
     const seats = index.bySlug.get(t.slug)!;
     return {
@@ -277,15 +291,6 @@ export async function topicPageCounts(): Promise<TopicCount[]> {
   });
 }
 
-// ---------------------------------------------------------------------------------------------------
-// Chronicle candidates use the same pure rules as historical replay. Keep cached index counts,
-// but reread the bounded reports whose current fields can decide a displayed event.
-
-function chronicleReport(s: Seat, sources: Map<number, number>): ChronicleReport {
-  return { ...s, timelineAt: s.at, storyPublicId: s.story, topicSlugs: s.topics,
-    sourceCount: s.factId === null ? 1 : Math.max(1, sources.get(s.factId) ?? 1) };
-}
-
 const poolCounts = new Map<string, Cached<number>>();
 
 /** Every listed report of the topic, selected or not (收录). */
@@ -293,7 +298,7 @@ function poolTotal(t: Topic, now?: Date): Promise<number> {
   const read = async (at: Date) => (await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM publications p WHERE ${listedCondition(at)} AND ${inTopic(t)}`)[0]?.n ?? 0;
   if (now) return read(now);
   let count = poolCounts.get(t.slug);
-  if (!count) poolCounts.set(t.slug, (count = cached(() => read(new Date()), { freshMs: 60_000, maxStaleMs: 10 * 60_000 })));
+  if (!count) poolCounts.set(t.slug, (count = cached(() => read(new Date()), { freshMs: 60_000, maxStaleMs: 60_000 })));
   return count.get();
 }
 
@@ -305,11 +310,15 @@ export async function loadTopicPage(slug: string, page: number, now?: Date): Pro
   const pageCount = Math.max(1, Math.ceil(seats.length / TOPIC_PAGE_SIZE));
   if (page > pageCount) return null;
   const ids = seats.slice((page - 1) * TOPIC_PAGE_SIZE, page * TOPIC_PAGE_SIZE).map((s) => s.id);
-  const first = page === 1;
   const at = now ?? new Date();
-  const history = first && topic.group === "company" ? curatedChronicle(topic.slug) : undefined;
-  const window = { now: at, through: history?.through };
-  const named = first ? chronicleReadReports(seats.map((s) => chronicleReport(s, index.sources)), window) : [];
+  // Reports read again before the page names them: the newest few, for the topic's latest one, and the
+  // ones the modules' parts may name.
+  const recheck = seats.slice(0, LATEST_CANDIDATES).map((s) => s.id);
+  const parts = serverModules().flatMap((m) => {
+    const part = m.topics?.page?.read({ topic, page, members: seats, index: index.modules.get(m.name), now: at });
+    return part ? [{ name: m.name, ...part }] : [];
+  });
+  for (const part of parts) recheck.push(...part.recheck);
   const [rows, pool, brands, live] = await Promise.all([
     ids.length
       ? sql<ItemRow[]>`SELECT ${ITEM_COLUMNS} ${ITEM_FROM} WHERE p.article_id = ANY(${ids}::text[]) AND ${seatedCondition(at)} AND ${inTopic(topic)}
@@ -317,20 +326,12 @@ export async function loadTopicPage(slug: string, page: number, now?: Date): Pro
       : [],
     poolTotal(topic, now),
     companyBrands(),
-    currentSeats([...seats.slice(0, LATEST_CANDIDATES), ...named].map((s) => s.id), at, [topic]),
+    currentSeats(recheck, at, [topic]),
   ]);
-  const shown = named.flatMap((s) => {
-    const current = live.get(s.id);
-    return current?.topics.includes(slug) ? [chronicleReport(current, index.sources)] : [];
-  });
   const groupName = TOPIC_GROUPS.find((g) => g.key === topic.group)?.name ?? "";
-  const picked = first ? selectTopicChronicle(topic, shown, window) : [];
   return {
     topic: { ...summarize(topic, seats, index.at, brands, live), groupName, poolTotal: pool },
-    kinds: CHRONICLE_KINDS,
-    chronicle: first && topic.group !== "company" ? picked : [],
-    milestones: first && topic.group === "company" ? companyMilestones(history, picked) : [],
-    highlights: first ? selectTopicHighlights(topic, shown, window) : [],
+    modules: Object.fromEntries(parts.map((part) => [part.name, part.part(live)])),
     items: rows.map(toFeedItemSummary),
     page,
     pageCount,

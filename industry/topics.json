@@ -155,7 +155,6 @@
       "name": "英超",
       "group": "field",
       "tags": ["英超"],
-      "chronicleTerms": ["英超", "英格兰超级联赛"],
       "definition": "英超联赛的争冠与保级形势、关键战报、判罚与政策的持续追踪。",
       "related": ["transfer-window", "match-reports", "champions-league"]
     },
@@ -204,7 +203,6 @@
       "name": "欧冠",
       "group": "field",
       "tags": ["欧冠"],
-      "chronicleTerms": ["欧冠", "欧洲冠军联赛"],
       "definition": "欧冠联赛的全部阶段：小组赛/联赛阶段、淘汰赛、决赛的战报与形势追踪。",
       "related": ["europa-league", "real-madrid", "man-city"]
     },
@@ -221,7 +219,6 @@
       "name": "世界杯",
       "group": "field",
       "tags": ["世界杯"],
-      "chronicleTerms": ["世界杯"],
       "definition": "世界杯的全部阶段：预选赛、正赛抽签、小组赛与淘汰赛的战报追踪。",
       "related": ["euro", "china-national"]
     },
@@ -230,7 +227,6 @@
       "name": "欧洲杯",
       "group": "field",
       "tags": ["欧洲杯"],
-      "chronicleTerms": ["欧洲杯"],
       "definition": "欧洲杯的全部阶段：预选赛、正赛与淘汰赛的战报追踪。",
       "related": ["world-cup", "champions-league"]
     },

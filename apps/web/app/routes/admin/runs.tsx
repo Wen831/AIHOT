@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { SITE } from "@aihot/industry/site";
+import { SITE } from "@aihot/site";
 import { Link, useFetcher } from "react-router";
 import { useEffect } from "react";
 import type { Route } from "./+types/runs";
@@ -8,6 +8,7 @@ import { adminGet } from "../../lib/admin.server";
 import { useAdminAction } from "../../features/admin/action";
 import { ago, bj, duration, num } from "../../features/admin/format";
 import { AdminPage, Badge, Button, Card, DataTable, Dot, Empty, Field, Json, ReasonDialog, Select, Stat, Time } from "../../features/admin/ui";
+import { loadParts } from "../../site-modules";
 
 
 export async function loader({ request }: Route.LoaderArgs) {
@@ -17,6 +18,8 @@ export async function loader({ request }: Route.LoaderArgs) {
 export const meta: Route.MetaFunction = () => [{ title: `运行 · ${SITE.name} 后台` }];
 
 const STATE_LABEL: Record<string, string> = { created: "排队", retry: "等待重试", active: "执行中" };
+
+const PARTS = await loadParts((m) => m.admin?.runs);
 
 export default function RunsAdmin({ loaderData }: Route.ComponentProps) {
   const refresh = useFetcher<typeof loader>();
@@ -194,29 +197,7 @@ export default function RunsAdmin({ loaderData }: Route.ComponentProps) {
         </Card>
       </div>
 
-      {r.leaderboard && (
-        <Card
-          className="mt-5"
-          title="模型榜评测来源"
-          right={<span>最近抓取 {bj(r.leaderboard.at)} · 成功 {r.leaderboard.sources.filter((x) => x.ok).length}/{r.leaderboard.sources.length}</span>}
-          pad={false}
-        >
-          <div className="max-h-[360px] overflow-y-auto">
-            <DataTable
-              dense
-              rows={r.leaderboard.sources}
-              rowKey={(x) => x.key}
-              columns={[
-                { key: "k", label: "来源", render: (x) => <span className="font-mono text-[12.5px]">{x.key}</span> },
-                { key: "s", label: "上次抓取", render: (x) => <Badge tone={x.ok ? "ok" : "bad"}>{x.ok ? (x.changed ? "有更新" : "无变化") : "失败"}</Badge> },
-                { key: "ok", label: "上次成功", render: (x) => <Time at={x.lastOkAt} /> },
-                { key: "n", label: "行数", align: "right", render: (x) => (x.rows == null ? "—" : num(x.rows)) },
-                { key: "e", label: "错误", render: (x) => <span className="line-clamp-1 text-[12px] text-ink-3" title={x.error ?? ""}>{x.error}</span> },
-              ]}
-            />
-          </div>
-        </Card>
-      )}
+      {PARTS.map(({ name, part: Part }) => (r.modules[name] != null ? <Part key={name} data={r.modules[name]} /> : null))}
 
       <div className="mt-5 grid gap-5 xl:grid-cols-2">
         <Card title="任务时间线" pad={false}>

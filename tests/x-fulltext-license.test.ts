@@ -1,6 +1,7 @@
-// An X post's own text, its translation, the post it quotes and its media are its body: the site shows
-// them only when the source allows full text (site_fulltext), full RSS only when it may also syndicate.
-// Every other exit keeps the item with its licensed summary.
+// An X post's own text, its translation, the post it quotes and its media are its body, on a site that
+// counts them as one (POLICY.xPostIsFullText): it shows them only when the source allows full text
+// (site_fulltext), full RSS only when it may also syndicate. Every other exit keeps the item with its
+// licensed summary.
 import { tag } from "./setup.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -11,27 +12,19 @@ import { upsertMaterial, type XPostData } from "@aihot/backend/content/materials
 import { stopBoss } from "@aihot/backend/jobs/queue";
 import { ITEM_COLUMNS, ITEM_FROM, toFeedItemSummary, type ItemRow } from "@aihot/backend/publication/items";
 import { publishArticle, republishSource } from "@aihot/backend/publication/publish";
+import { POLICY } from "@aihot/site";
 import { buildApp } from "../apps/api/src/app.ts";
 
 const T = `x-license-${tag()}`;
 const app = await buildApp();
-const stories: string[] = [];
-const quotes: string[] = [];
 let n = 0;
+// A site that shows every X post like its title and summary has no unlicensed post text to hide.
+const hidesPosts = { skip: !POLICY.xPostIsFullText && "this site shows every X post's own text" };
 
 after(async () => {
   await app.close();
   await stopBoss();
-  try {
-    await sql`DELETE FROM articles WHERE source_id LIKE ${`${T}-%`}`;
-    await sql`DELETE FROM sources WHERE id LIKE ${`${T}-%`}`;
-    if (stories.length) {
-      await sql`DELETE FROM facts WHERE story_id IN (SELECT id FROM stories WHERE public_id::text IN ${sql(stories)})`;
-      await sql`DELETE FROM stories WHERE public_id::text IN ${sql(stories)}`;
-    }
-    if (quotes.length) await sql`DELETE FROM quote_translations WHERE tweet_id IN ${sql(quotes)}`;
-    await sql`DELETE FROM settings WHERE key LIKE ${`republish.source:${T}-%`}`;
-  } finally { await closeDb(); }
+  await closeDb();
 });
 
 async function fixture(options: {
@@ -44,13 +37,12 @@ async function fixture(options: {
   const source = key;
   const tweet = `${Date.now()}${n}0`;
   const quote = `${Date.now()}${n}1`;
-  quotes.push(quote);
   const main = `X-MAIN-${key}`;
   const zh = options.translation === "same" ? main : `X-ZH-${key}`;
   const quoted = `X-QUOTED-${key}`;
   const quotedZh = options.translation === "same" ? quoted : `X-QUOTED-ZH-${key}`;
   const media = `X-MEDIA-${key}`;
-  const summary = options.summary === false ? null : `摘要-${key}`;
+  const summary = options.summary === false || options.shape === "quote-only" ? null : `摘要-${key}`;
   const kind = options.kind ?? "x_search";
   const url = kind === "x_search" ? `https://x.com/license/status/${tweet}` : `https://example.org/${key}`;
   const xPost: XPostData | null = kind === "rss" || options.shape === "missing" ? null : {
@@ -75,7 +67,6 @@ async function fixture(options: {
   }
   await sql`INSERT INTO quote_translations (tweet_id, text_hash, text_zh, origin) VALUES (${quote}, ${key}, ${quotedZh}, 'reused')`;
   const story = randomUUID();
-  stories.push(story);
   const [savedStory] = await sql<{ id: number }[]>`INSERT INTO stories (public_id, title) VALUES (${story}, '许可测试事件') RETURNING id`;
   const fact = `fact-${key}`;
   const [savedFact] = await sql<{ id: number }[]>`INSERT INTO facts (public_id, story_id, title) VALUES (${fact}, ${savedStory!.id}, '许可测试进展') RETURNING id`;
@@ -83,7 +74,7 @@ async function fixture(options: {
   await publishArticle(id, { releasedAt: new Date(Date.now() - 60_000) });
   const [publication] = await sql`SELECT body_mode, eligible FROM publications WHERE article_id = ${id}`;
   assert.equal(publication!.body_mode, options.full && (!options.bodyStatus || options.bodyStatus === "ok") ? "full" : "summary");
-  assert.equal(publication!.eligible, !!summary && (!options.mode || options.mode === "editorial"));
+  assert.equal(publication!.eligible, (!!summary || options.shape === "quote-only") && (!options.mode || options.mode === "editorial"));
   return { id, source, key, fact, story, url, summary, main, zh, quoted, quotedZh, media, markers: [main, zh, quoted, quotedZh, media] };
 }
 
@@ -155,25 +146,25 @@ async function revoke(f: Fixture, patch: { site_fulltext?: boolean; syndicate_fu
   assert.equal(updated!.participation_mode, "editorial");
 }
 
-test("R01: X detail and original omit unlicensed text, translations, quotes and media", async () => {
+test("R01: X detail and original omit unlicensed text, translations, quotes and media", hidesPosts, async () => {
   await summaryDetail(await fixture());
 });
 
-test("R02: Markdown exports only the licensed summary", async () => {
+test("R02: Markdown exports only the licensed summary", hidesPosts, async () => {
   await summaryMarkdown(await fixture());
 });
 
-test("R02: an unlicensed X post without a summary cannot enable Markdown", async () => {
+test("R02: an unlicensed X post without a summary cannot enable Markdown", hidesPosts, async () => {
   const f = await fixture({ summary: false });
   await summaryDetail(f);
   await summaryMarkdown(f);
 });
 
-test("R03: every list projection retains the item without unlicensed X content", async () => {
+test("R03: every list projection retains the item without unlicensed X content", hidesPosts, async () => {
   await summaryLists(await fixture());
 });
 
-test("R04: revoking only site fulltext keeps editorial summaries after republishing", async () => {
+test("R04: revoking only site fulltext keeps editorial summaries after republishing", hidesPosts, async () => {
   const f = await fixture({ full: true });
   assert.ok((await get(`/api/site/items/${f.id}/original`)).body.includes(f.main));
   assert.ok((await feedItem("/feed/full.xml", f)).includes(f.zh));
@@ -199,7 +190,7 @@ test("R05: revoking only syndication preserves licensed site reading and Markdow
 
 for (const kind of ["x_search", "rss"] as const) {
   for (const full of [false, true]) for (const syndicate of [false, true]) {
-    test(`R06/R07: ${kind} licence matrix site=${full}, syndicate=${syndicate}`, async () => {
+    test(`R06/R07: ${kind} licence matrix site=${full}, syndicate=${syndicate}`, kind === "x_search" && !full ? hidesPosts : {}, async () => {
       const f = await fixture({ kind, full, syndicate });
       if (full) {
         const normal = (await get(`/api/site/items/${f.id}`)).json();
@@ -238,14 +229,14 @@ for (const kind of ["x_search", "rss"] as const) {
 }
 
 for (const shape of ["missing", "quote-only"] as const) {
-  test(`R08: an unlicensed ${shape} X structure does not restore content`, async () => {
+  test(`R08: an unlicensed ${shape} X structure does not restore content`, hidesPosts, async () => {
     const f = await fixture({ shape });
     await summaryDetail(f);
     await summaryMarkdown(f);
   });
 }
 for (const bodyStatus of ["unconfirmed", "none"] as const) {
-  test(`R08: site permission does not override body status ${bodyStatus}`, async () => {
+  test(`R08: site permission does not override body status ${bodyStatus}`, hidesPosts, async () => {
     const f = await fixture({ full: true, bodyStatus });
     await summaryDetail(f);
     await summaryMarkdown(f);
@@ -253,7 +244,7 @@ for (const bodyStatus of ["unconfirmed", "none"] as const) {
 }
 
 for (const translation of ["missing", "stale", "same"] as const) {
-  test(`R09: ${translation} translations retain existing licensed behavior and never bypass revocation`, async () => {
+  test(`R09: ${translation} translations retain existing licensed behavior and never bypass revocation`, hidesPosts, async () => {
     const f = await fixture({ full: true, translation });
     const detail = (await get(`/api/site/items/${f.id}`)).json();
     assert.equal(detail.hasTranslation, false);

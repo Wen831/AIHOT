@@ -20,7 +20,7 @@ export const CATEGORIES = [
   { key: "national", label: "国家队", section: "俱乐部与国家队", guide: "国家队大名单、大赛征程、国字号球队动态、国际比赛日；针对国字号的判罚处罚与规则变化、围绕国字号比赛的复盘与观点评论也归此类；国字号比赛的赛果与赛前备战归比赛类" },
   { key: "transfer", label: "转会", section: "转会窗", guide: "转会官宣、达成协议、租借、续约、解约，以及有实质进展的转会传闻" },
   { key: "github", label: "GitHub", section: "GitHub 热门项目", guide: "仅由 GitHub showcase 专用通道入库的开源项目条目；新闻资料一律不归此类，按其内容归对应新闻类别" },
-] as const satisfies ReadonlyArray<{ key: string; label: string; section: string; guide: string; commentary?: true }>;
+] as const satisfies ReadonlyArray<{ key: string; label: string; feedLabel?: string; section: string; guide: string; commentary?: true }>;
 
 /**
  * 这个行业最受关注的一类发布（AI 行业是新模型）：日报报头的“N 个新模型”、改分类后修订已出的报告、

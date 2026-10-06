@@ -8,7 +8,9 @@ import { enqueue, QUEUES } from "../jobs/queue.ts";
 import { groupingReset } from "../content/provenance.ts";
 import { publishArticle, publishArticleTx } from "../publication/publish.ts";
 import { recordSignal, resetAutomatic } from "./group.ts";
+import { composeStoryDigest } from "./digest.ts";
 import { mergeStoryInto } from "./merge.ts";
+import { emit } from "../modules.ts";
 
 /**
  * Takes an article out of its fact; it is shown on its own again and stays that way (automatic
@@ -97,6 +99,18 @@ export async function mergeStories(fromId: number, intoId: number, reason: strin
 }
 
 /**
+ * Writes one story's digest again from its current reports with the current prompt (after the digest
+ * prompt changed). Unchanged prompt and reports reuse the paid answer; the model call happens here.
+ */
+export async function rewriteStoryDigest(storyId: number, reason: string, actor: string) {
+  const [before] = await sql<{ digest: string | null; version: number }[]>`SELECT digest, version FROM stories WHERE id = ${storyId} AND merged_into IS NULL`;
+  if (!before) throw new Error("story not found");
+  const result = await composeStoryDigest(storyId, { rewrite: true });
+  await audit(actor, "story.rewrite-digest", `story:${storyId}`, reason, before, result);
+  return result;
+}
+
+/**
  * An explicit regroup: it replaces an earlier "keep standalone" decision and drops the automatic
  * membership and heat evidence now (manual memberships stay and still win), so until its grouping job
  * decides again the report stands on its own and is evidence for no other. The same request id
@@ -106,9 +120,17 @@ export async function requestRegroup(articleId: string, requestId: string, db: D
   if ("begin" in db) return (db as typeof sql).begin(tx => requestRegroup(articleId, requestId, tx));
   // The grouping job writes under the same lock and reads the manual state again before it does.
   await db`SELECT 1 FROM articles WHERE id = ${articleId} FOR UPDATE`;
+  const previous = await db<{ story_id: number }[]>`
+    SELECT story_id FROM publications WHERE article_id = ${articleId} AND story_id IS NOT NULL
+    UNION
+    SELECT f.story_id FROM facts f JOIN fact_articles fa ON fa.fact_id = f.id
+    WHERE fa.article_id = ${articleId} AND f.story_id IS NOT NULL`;
   await db`DELETE FROM grouping_overrides WHERE article_id = ${articleId}`;
   await resetAutomatic(db as Tx, articleId);
   await db`UPDATE articles SET ${groupingReset()} WHERE id = ${articleId}`;
-  await publishArticleTx(db as Tx, articleId);
+  const published = await publishArticleTx(db as Tx, articleId);
+  if (published?.changed || previous.length) await emit("articleChanged", {
+    id: articleId, kind: "content", reduced: published?.reduced, reason: "regroup requested", previousStoryIds: previous.map((r) => r.story_id),
+  }, db);
   return enqueue(QUEUES.group, { articleId }, { singletonKey: `manual:group:${articleId}:${requestId}` }, db);
 }

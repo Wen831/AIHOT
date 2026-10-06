@@ -1,5 +1,6 @@
 // Recovery must finish the same evaluation that failed, and commit the release, queue and audit together.
-import { gate, Reply, stub, tag } from "./setup.ts";
+import { gate, pointModels, Reply, stub, tag } from "./setup.ts";
+import { analysisStep, SELECTING_SCORE } from "./analysis-steps.ts";
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
 import { after, afterEach, before, test } from "node:test";
@@ -19,29 +20,24 @@ let refuseScore = true;
 const calls: string[] = [];
 let heldFailure: { input: string; asked: ReturnType<typeof gate<void>>; release: ReturnType<typeof gate<void>> } | null = null;
 const provider = await stub(async (_hit, request) => {
-  const body = JSON.parse(request.body);
   if (heldFailure && request.body.includes(heldFailure.input)) {
     heldFailure.asked.open();
     await heldFailure.release.promise;
     return new Reply(400, { error: "old revision refused" });
   }
-  const system = String(body.messages[0]?.content ?? "");
-  const step = system.includes("宽召回的足球与国内新闻相关性预筛") ? "prefilter"
-    : system.includes("事件注意力评分器") ? "score"
-    : system.includes("资料结构化助手") ? "structure" : "understand";
+  const step = analysisStep(request.body);
   calls.push(step);
   if (step === "score" && refuseScore) {
     refuseScore = false;
     return new Reply(503, { error: "temporary outage" });
   }
   const content = step === "prefilter" ? { label: original ? "BLOCK" : "PASS", reason: "local fixture" }
-    : step === "score" ? { attentionScore: 80 }
-    : step === "structure" ? { category: "china-politics", tags: [], subjects: [], fact: null }
-    : { itemType: "policy_news", authorRole: "principal", tags: ["时政要闻"], editorialJudgment: "政策影响明确", titleZh: `新判断 ${T}`, summaryZh: "新政策出台并公布细则和生效时间。" };
+    : step === "score" ? { attentionScore: SELECTING_SCORE }
+    : step === "structure" ? { category: "ai-models", tags: [], subjects: [], fact: null }
+    : { itemType: "model_release", authorRole: "principal", tags: ["模型发布"], editorialJudgment: "模型能力提升", titleZh: `新判断 ${T}`, summaryZh: "模型发布并提供评测和价格。" };
   return { choices: [{ message: { content: JSON.stringify(content) } }] };
 });
-for (const name of ["DASHSCOPE_BASE_URL", "ZHIPU_BASE_URL", "DEEPSEEK_BASE_URL"]) process.env[name] = `${provider.url}/v1`;
-for (const name of ["DASHSCOPE_API_KEY", "ZHIPU_API_KEY", "DEEPSEEK_API_KEY"]) process.env[name] = "test-key";
+pointModels(provider.url);
 
 before(async () => {
   await sql`INSERT INTO sources (id,name,kind,tier,participation_mode,next_fetch_at)
@@ -56,6 +52,12 @@ async function article(name: string) {
   return (await upsertMaterial({ sourceId: SOURCE, url: `https://example.org/${T}/${name}`, title: `AI model ${T} ${name}`,
     bodyText: `AI lab release ${T} ${name}. ` + "The new model includes benchmark and price details. ".repeat(12),
     bodyStatus: "ok", via: "fetch", backfill: "test fixture", publishedAt: new Date() })).articleId;
+}
+
+/** Wakes this process's analysis workers to fetch now, instead of waiting out their polling interval. */
+async function wakeAnalysis() {
+  const boss = await getBoss();
+  for (const worker of boss.getWipData()) if (worker.name === QUEUES.analyze) boss.notifyWorker(worker.id);
 }
 
 async function waitFor(check: () => Promise<boolean>) {
@@ -140,10 +142,12 @@ test("a temporary provider failure resumes the manual evaluation instead of rein
   original = false;
   await registerContentJobs(await getBoss());
   const result = await rerun(id, "analyze", `retry-${T}`, "test");
+  await wakeAnalysis();
   await waitFor(async () => (await sql`SELECT state FROM pgboss.job WHERE id=${result!.jobId}`)[0]?.state === "completed");
   assert.equal((await sql`SELECT processing_attempts FROM articles WHERE id=${id}`)[0]!.processing_attempts, 1);
   await sql`UPDATE articles SET processing_retry_at=now()-interval '1 minute',created_at=now()-interval '10 minutes' WHERE id=${id}`;
   await sweepUnprocessed();
+  await wakeAnalysis();
   await waitFor(async () => (await sql`SELECT 1 FROM pgboss.job WHERE name=${QUEUES.analyze} AND data->>'articleId'=${id} AND state<'completed'`).length === 0);
   assert.equal((await sql`SELECT processing_state FROM articles WHERE id=${id}`)[0]!.processing_state, "analyzed");
   assert.equal((await sql`SELECT selection_candidate FROM publications WHERE article_id=${id}`)[0]!.selection_candidate, true);
@@ -159,6 +163,7 @@ test("a late refusal for an old revision preserves the new revision's completed 
   const release = gate();
   heldFailure = { input: `revision-race`, asked, release };
   const jobId = await queueProcessing(id);
+  await wakeAnalysis();
   await asked.promise;
   try {
     await upsertMaterial({ sourceId: SOURCE, url: `https://example.org/${T}/revision-race`, title: `Corrected ${T}`,

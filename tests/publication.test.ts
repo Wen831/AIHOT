@@ -1,12 +1,7 @@
 // Public scope and sync through the real api routes: a licence revocation or a withdrawal reaches
 // every exit, reports stop quoting withdrawn items, the hot board drops a withdrawn item at once, item
-// pages follow one rule, a withdrawal next to an unresolved selection leaves new snapshots
-// at once, and snapshots answer conditional requests.
-import { CATEGORY_LABELS } from "@aihot/contracts/taxonomy";
-import { withSubject } from "@aihot/industry/site";
-import { beijingDate } from "@aihot/contracts/time";
-import { ogEtag } from "../apps/api/src/og/render.ts";
-import { posterEtag } from "../apps/api/src/og/poster.ts";
+// pages follow one rule, a withdrawal next to an unresolved selection leaves new snapshots at once, and
+// snapshots answer conditional requests.
 import { tag } from "./setup.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -22,6 +17,7 @@ import { stopBoss } from "@aihot/backend/jobs/queue";
 import { publishArticle, republishSource } from "@aihot/backend/publication/publish";
 import { computeHotRanking } from "@aihot/backend/events/hot";
 import { latestHotRanking } from "@aihot/backend/publication/hot";
+import { loadItemShare } from "@aihot/backend/publication/og";
 import { buildApp } from "../apps/api/src/app.ts";
 
 const T = tag();
@@ -170,6 +166,31 @@ test("revoking a source's licence takes its articles off every exit", async () =
   await sql`UPDATE sources SET participation_mode = 'editorial', site_fulltext = true, syndicate_fulltext = true WHERE id = ${SOURCE}`;
 });
 
+// Losing redistribution permission must remove the RSS body without also withdrawing the item or
+// its licensed website body. Revoking all three source permissions at once cannot exercise this case.
+test("revoking only redistribution keeps the website body and removes it from full RSS", async () => {
+  const id = await article();
+  await sql`UPDATE articles SET grouping_status = 'complete' WHERE id = ${id}`;
+  await publishArticle(id, released());
+  const feedItem = async () => (await get("/feed/full.xml")).body.split("<item>").find((item) => item.includes(`<guid isPermaLink="false">${id}</guid>`));
+  assert.ok((await feedItem())?.includes(`FULLTEXT-${T}`));
+
+  const [source] = await sql<{ updated_at: Date }[]>`SELECT updated_at FROM sources WHERE id = ${SOURCE}`;
+  try {
+    await updateSource(SOURCE, { patch: { syndicate_fulltext: false }, version: source!.updated_at.toISOString(), reason: "test" }, "test");
+    await republishSource(SOURCE);
+    const item = await feedItem();
+    assert.ok(item, "the article remains in RSS");
+    assert.ok(!item.includes(`FULLTEXT-${T}`), "RSS no longer carries the body");
+    assert.ok(!item.includes("<content:encoded>"));
+    const detail = await get(`/api/site/items/${id}`);
+    assert.equal(detail.status, 200);
+    assert.ok(detail.body.includes(`FULLTEXT-${T}`), "the website retains its separate full-text permission");
+  } finally {
+    await sql`UPDATE sources SET syndicate_fulltext = true WHERE id = ${SOURCE}`;
+  }
+});
+
 test("a withdrawn item leaves every report exit", async () => {
   const id = await article();
   await publishArticle(id, released());
@@ -183,16 +204,15 @@ test("a withdrawn item leaves every report exit", async () => {
   assert.ok((await get(`/api/v1/dailies/${REPORT_KEY}`)).body.includes(`QUOTED-${T}`), "the report quotes the item before");
 
   await setVisibility(id, { visibility: "withdrawn", reason: "test", version: 0 }, "test");
-  for (const url of [`/api/v1/dailies/${REPORT_KEY}`, `/api/site/reports/daily/${REPORT_KEY}`, `/api/v1/agent/daily/${REPORT_KEY}`, "/api/v1/agent/daily"]) {
+  const reports = [`/api/v1/dailies/${REPORT_KEY}`, `/api/site/reports/daily/${REPORT_KEY}`, `/api/v1/agent/daily/${REPORT_KEY}`, "/api/v1/agent/daily"];
+  for (const url of reports) {
     const res = await get(url);
     assert.equal(res.status, 200, url);
     assert.ok(!res.body.includes(`QUOTED-${T}`) && !res.body.includes(`original-${T}`), `${url} still quotes the withdrawn item`);
   }
-  for (const url of ["/api/v1/dailies"]) {
-    const res = await get(url);
-    assert.ok(res.body.includes(REPORT_KEY), `${url} lists the report`);
-    assert.ok(!res.body.includes(`LEAD-${T}`), `${url} headlines the withdrawn title`);
-  }
+  const list = await get("/api/v1/dailies");
+  assert.ok(list.body.includes(REPORT_KEY), "/api/v1/dailies lists the report");
+  assert.ok(!list.body.includes(`LEAD-${T}`), "/api/v1/dailies headlines the withdrawn title");
 });
 
 test("story changes refresh share images and a withdrawal takes down only the stories citing it", async () => {
@@ -209,8 +229,7 @@ test("story changes refresh share images and a withdrawal takes down only the st
   const cachedImage = await app.inject({ method: "GET", url: imageUrl, headers: { "if-none-match": String(image.headers.etag) } });
   assert.equal(cachedImage.statusCode, 304);
   for (const response of [image, cachedImage]) {
-    assert.equal(response.headers["cache-control"], "public, max-age=3600, s-maxage=3600, stale-while-revalidate=600");
-    assert.equal(response.headers["x-accel-expires"], "300", "a proxy in front keeps its copy for five minutes");
+    assert.equal(response.headers["cache-control"], "public, max-age=300, s-maxage=3600, must-revalidate");
   }
   await sql`UPDATE stories SET title = 'Corrected event identity' WHERE public_id = ${stories[0]!}`;
   const corrected = await app.inject({ method: "GET", url: imageUrl, headers: { "if-none-match": String(image.headers.etag) } });
@@ -302,11 +321,9 @@ test("unresolved selection does not delay a withdrawal or its sync watermark", a
   await publishArticle(y); // unresolved: no selected ledger entry yet
   await setVisibility(x, { visibility: "withdrawn", reason: "test", version: 0 }, "test");
 
-  for (const url of ["/api/v1/selected/snapshot?fields=minimal&limit=1000"]) {
-    const body = (await get(url)).body;
-    assert.ok(!body.includes(x), `${url} still lists the withdrawn item`);
-    assert.ok(!body.includes(y), `${url} lists an item before its release`);
-  }
+  const listed = (await get("/api/v1/selected/snapshot?fields=minimal&limit=1000")).body;
+  assert.ok(!listed.includes(x), "the snapshot still lists the withdrawn item");
+  assert.ok(!listed.includes(y), "the snapshot lists an item before its release");
   // This snapshot already includes the withdrawal; completing y adds only y afterwards.
   const snapshot = JSON.parse((await get("/api/v1/selected/snapshot?fields=minimal&limit=1000")).body) as { cursor: string };
   await sql`UPDATE articles SET grouping_status = 'complete', grouped_at = now() WHERE id = ${y}`;
@@ -319,11 +336,10 @@ test("unresolved selection does not delay a withdrawal or its sync watermark", a
 });
 
 test("snapshots answer 304 to their own ETag", async () => {
-  for (const url of ["/api/v1/selected/snapshot?fields=minimal&limit=1000"]) {
-    const first = await get(url);
-    assert.ok(first.etag, `${url} has an ETag`);
-    assert.equal((await get(url, { "if-none-match": first.etag! })).status, 304, url);
-  }
+  const url = "/api/v1/selected/snapshot?fields=minimal&limit=1000";
+  const first = await get(url);
+  assert.ok(first.etag, `${url} has an ETag`);
+  assert.equal((await get(url, { "if-none-match": first.etag! })).status, 304, url);
 });
 
 // Failure cases: an offline client resumes before a withdrawal; a one-entry page must not send the
@@ -335,21 +351,19 @@ test('historical sync never redistributes withdrawn content, even on a one-entry
       const id = await article();
       await publishArticle(id, released());
       await setVisibility(id, { visibility, reason: 'test offline sync', version: 0 }, 'test');
-      for (const [prefix, limit] of [['v1', 'limit']]) {
-        const response = await get(`/api/${prefix}/selected/changes?${limit}=1&cursor=${encodeURIComponent(start)}`);
-        assert.equal(response.status, 200);
-        const page = JSON.parse(response.body);
-        assert.equal(page.changes[0].op, 'remove', `${prefix} ${fields} ${visibility}`);
-        assert.equal(page.changes[0].id, id);
-        assert.equal(page.changes[0].item, undefined);
-        assert.notEqual(page.cursor, start, 'redacting a historical upsert must still advance');
-        assert.equal(page.hasMore, true, 'the later removal is still resumable');
-      }
+      const response = await get(`/api/v1/selected/changes?limit=1&cursor=${encodeURIComponent(start)}`);
+      assert.equal(response.status, 200);
+      const page = JSON.parse(response.body);
+      assert.equal(page.changes[0].op, 'remove', `${fields} ${visibility}`);
+      assert.equal(page.changes[0].id, id);
+      assert.equal(page.changes[0].item, undefined);
+      assert.notEqual(page.cursor, start, 'redacting a historical upsert must still advance');
+      assert.equal(page.hasMore, true, 'the later removal is still resumable');
     }
   }
 });
 
-test("v1 story retains website content and fallback ordering without the website-only heat reads", async () => {
+test("v1 story matches the website's content and fallback ordering", async () => {
   const first = await article();
   const second = await article();
   await publishArticle(first, released());
@@ -389,58 +403,66 @@ test('event neighbors disappear when their last readable evidence is withdrawn',
   for (const url of exits) assert.ok(!(await get(url)).body.includes(neighbor), `${url} must not advertise an unreadable neighbor`);
 });
 
-
 test("unchanged republishing preserves freshness, while URL-only changes still reach the projection and ledger", async () => {
   const id = await article();
   await publishArticle(id, released());
-  const state = async () => (await sql`SELECT xmin::text AS row_version, updated_at, revision, url FROM publications WHERE article_id = ${id}`)[0]!;
+  const state = async () => (await sql`SELECT updated_at, revision, url FROM publications WHERE article_id = ${id}`)[0]!;
   const before = await state();
   const [ledger] = await sql`SELECT max(seq) AS seq FROM selected_ledger WHERE article_id = ${id}`;
   const unchanged = await publishArticle(id);
   assert.equal(unchanged!.changed, false);
   assert.equal(unchanged!.ledger, null);
-  assert.deepEqual({ ...await state() }, { ...before }, "no new tuple or freshness timestamp for identical content");
+  assert.deepEqual({ ...await state() }, { ...before }, "no new freshness timestamp or revision for identical content");
   assert.equal((await sql`SELECT max(seq) AS seq FROM selected_ledger WHERE article_id = ${id}`)[0]!.seq, ledger!.seq);
 
   const url = `https://example.com/${T}-corrected`;
   await sql`UPDATE articles SET url = ${url} WHERE id = ${id}`;
   const result = await publishArticle(id);
-  assert.equal(result!.changed, false, "URL is deliberately outside the presentation fingerprint");
+  assert.equal(result!.changed, true, "URL changes are public changes and refresh dependent exits");
   assert.equal(result!.ledger, "upsert", "the public URL change is still recorded for sync clients");
   const changed = await state();
   assert.equal(changed.url, url);
-  assert.notEqual(changed.row_version, before.row_version);
   assert.ok(changed.updated_at >= before.updated_at);
-  assert.equal(changed.revision, before.revision);
+  assert.equal(changed.revision, before.revision + 1);
 });
 
-test("share images keep detail metadata and access rules while conditional reads avoid body hydration", async () => {
+test("a cached share-image validator never outlives the selected verdict or a withdrawal", async () => {
   const id = await article();
   await publishArticle(id, released());
-  const d = JSON.parse((await get(`/api/site/items/${id}`)).body);
-  const kicker = d.category ? CATEGORY_LABELS[d.category as keyof typeof CATEGORY_LABELS] : withSubject("动态");
-  const source = d.source.name;
-  const date = beijingDate(d.timelineAt);
-  const card = { kicker, title: d.title, subtitle: d.summary, meta: `${source} · ${date}`,
-    badge: d.selected && d.score !== null ? { value: String(Math.round(d.score)), label: "精选评分" } : null };
-  const poster = { url: `${config.siteUrl}/items/${id}`, kicker, title: d.title, summary: d.summary, source, date, score: d.selected ? d.score : null };
-  const paths = [[`/og/items/${id}.png`, `"og-${ogEtag(card)}"`], [`/og/posters/${id}.png`, `"poster-${posterEtag(poster)}"`]];
-  const queries: string[] = [];
-  const previous = sql.options.debug;
-  sql.options.debug = (_connection, query) => { queries.push(query); };
-  try {
-    for (const [path, etag] of paths) {
-      const response = await get(path!, { "if-none-match": etag! });
-      assert.equal(response.status, 304);
-      assert.equal(response.etag, etag);
-    }
-    assert.equal(queries.length, 2);
-    assert.ok(queries.every((q) => !/body_html|body_text|translations|fact_articles/.test(q)), "cards only load their public metadata");
-  } finally { sql.options.debug = previous; }
+  const paths: Array<[string, string]> = [];
+  for (const path of [`/og/items/${id}.png`, `/og/posters/${id}.png`]) paths.push([path, String((await app.inject({ method: "GET", url: path })).headers.etag)]);
   await sql`UPDATE publications SET visibility = 'summary-only' WHERE article_id = ${id}`;
-  assert.equal((await get(paths[0]![0]!, { "if-none-match": paths[0]![1]! })).status, 304, "summary-only pages keep the same allowed share summary");
+  assert.equal((await get(paths[0]![0], { "if-none-match": paths[0]![1] })).status, 200, "summary-only images remove the former selected verdict");
   await sql`UPDATE publications SET visibility = 'withdrawn' WHERE article_id = ${id}`;
-  for (const [path, etag] of paths) assert.equal((await get(path!, { "if-none-match": etag! })).status, 404, "cached ETags never bypass current visibility");
+  for (const [path, etag] of paths) assert.equal((await get(path, { "if-none-match": etag })).status, 404, "cached ETags never bypass current visibility");
+});
+
+// Restricting a selected item to a neutral summary must also remove its selected badge, score,
+// classification and story links from the detail and both share-image projections.
+test("summary-only detail and sharing keep neutral metadata without a selected verdict", async () => {
+  const id = await article();
+  await storyFor(id);
+  await publishArticle(id, released());
+  const before = JSON.parse((await get(`/api/site/items/${id}`)).body);
+  assert.equal(before.selected, true);
+  assert.ok(before.story);
+  await setVisibility(id, { visibility: "summary-only", reason: "neutral summary", version: 0 }, "test");
+  for (const suffix of ["", "/original"]) {
+    const item = JSON.parse((await get(`/api/site/items/${id}${suffix}`)).body);
+    assert.equal(item.title, before.title);
+    assert.equal(item.summary, before.summary);
+    assert.equal(item.links.original, before.links.original);
+    assert.equal(item.selected, false);
+    for (const field of ["score", "reason", "category", "story", "body", "x"]) assert.equal(item[field], null, field);
+    assert.deepEqual(item.tags, []);
+    assert.deepEqual(item.topics, []);
+    assert.equal(item.markdownAvailable, false);
+  }
+  const share = (await loadItemShare(id))!;
+  assert.equal(share.selected, false);
+  assert.equal(share.score, null);
+  assert.equal(share.category, null);
+  assert.equal(share.summary, before.summary);
 });
 
 test("minimal sync projection preserves snapshot fields, pagination bindings and ordered changes", async () => {

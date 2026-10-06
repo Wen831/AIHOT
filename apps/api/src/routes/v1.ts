@@ -1,7 +1,6 @@
-// Public API v1 (long-term). Field shapes follow reference/public-v1.openapi.json (the paths stay /api/v1);
-// each operation's query parameters and Cache-Control are listed in V1_OPERATIONS.
+// Public API v1 (long-term). Field shapes follow the OpenAPI document at /openapi-v1.json (the paths stay
+// /api/v1); each operation's query parameters and Cache-Control are listed in V1_OPERATIONS.
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { FEATURES } from "@aihot/industry/features";
 import { PUBLIC_API_CATEGORY_KEYS, type PublicApiCategoryKey } from "@aihot/contracts/taxonomy";
 import { config } from "@aihot/backend/config";
 import { InvalidCursorError } from "@aihot/backend/lib/cursor";
@@ -9,31 +8,29 @@ import { SearchBusyError } from "@aihot/backend/publication/pool";
 import { selectedChanges, selectedSnapshot, SnapshotRequiredError, v1Items } from "@aihot/backend/publication/v1";
 import { resolveStory, v1HotTopics, v1Story } from "@aihot/backend/publication/stories";
 import { isPeriodKey, v1Dailies, v1Daily, v1Period, v1Periods } from "@aihot/backend/publication/reports";
-import { codexResetsRecent, codexResetsSnapshot } from "@aihot/backend/monitor/read";
 import { isValidDate } from "@aihot/contracts/time";
-import { applyPublicHeaders, QueryError, sendJsonWithEtag, sendProblem, strictQuery } from "../http/respond.ts";
+import { requestNotice } from "@aihot/backend/modules";
+import { applyPublicHeaders, QueryError, sendJsonWithNotice, sendJsonWithEtag, sendProblem, strictQuery } from "../http/respond.ts";
 
 type Handler = (req: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
 
 const op = (queryKeys: readonly string[], cacheControl: string) => ({ queryKeys, cacheControl });
 
 export const V1_OPERATIONS = {
-  items: op(["mode", "category", "window", "by", "q", "limit", "cursor"], "public, max-age=60, s-maxage=60, stale-while-revalidate=300"),
-  codexResets: op([], "public, max-age=60, s-maxage=60, stale-while-revalidate=60"),
-  codexResetsRecent: op([], "public, max-age=60, s-maxage=60, stale-while-revalidate=60"),
-  hotTopics: op([], "public, max-age=60, s-maxage=60, stale-while-revalidate=60"),
-  storyByPublicId: op([], "public, max-age=60, s-maxage=60, stale-while-revalidate=60"),
-  dailies: op(["limit"], "public, max-age=60, s-maxage=60, stale-while-revalidate=300"),
-  latestDaily: op([], "public, max-age=60, s-maxage=60, stale-while-revalidate=300"),
-  dailyByDate: op([], "public, max-age=300, s-maxage=300, stale-while-revalidate=3600"),
-  weeklies: op(["limit"], "public, max-age=300, s-maxage=300, stale-while-revalidate=3600"),
-  latestWeekly: op([], "public, max-age=300, s-maxage=300, stale-while-revalidate=3600"),
-  weeklyByWeek: op([], "public, max-age=300, s-maxage=300, stale-while-revalidate=3600"),
-  monthlies: op(["limit"], "public, max-age=300, s-maxage=300, stale-while-revalidate=3600"),
-  latestMonthly: op([], "public, max-age=300, s-maxage=300, stale-while-revalidate=3600"),
-  monthlyByMonth: op([], "public, max-age=300, s-maxage=300, stale-while-revalidate=3600"),
-  selectedSnapshot: op(["fields", "limit", "page"], "public, max-age=300, s-maxage=300, stale-while-revalidate=900"),
-  selectedChanges: op(["cursor", "limit"], "public, max-age=60, s-maxage=60, stale-while-revalidate=60"),
+  items: op(["mode", "category", "window", "by", "q", "limit", "cursor"], "public, max-age=60, s-maxage=60, must-revalidate"),
+  hotTopics: op([], "public, max-age=60, s-maxage=60, must-revalidate"),
+  storyByPublicId: op([], "public, max-age=60, s-maxage=60, must-revalidate"),
+  dailies: op(["limit"], "public, max-age=60, s-maxage=60, must-revalidate"),
+  latestDaily: op([], "public, max-age=60, s-maxage=60, must-revalidate"),
+  dailyByDate: op([], "public, max-age=300, s-maxage=300, must-revalidate"),
+  weeklies: op(["limit"], "public, max-age=300, s-maxage=300, must-revalidate"),
+  latestWeekly: op([], "public, max-age=300, s-maxage=300, must-revalidate"),
+  weeklyByWeek: op([], "public, max-age=300, s-maxage=300, must-revalidate"),
+  monthlies: op(["limit"], "public, max-age=300, s-maxage=300, must-revalidate"),
+  latestMonthly: op([], "public, max-age=300, s-maxage=300, must-revalidate"),
+  monthlyByMonth: op([], "public, max-age=300, s-maxage=300, must-revalidate"),
+  selectedSnapshot: op(["fields", "limit", "page"], "public, max-age=300, s-maxage=300, must-revalidate"),
+  selectedChanges: op(["cursor", "limit"], "public, max-age=60, s-maxage=60, must-revalidate"),
 };
 
 export function intParam(value: string | undefined, name: string, min: number, max: number, fallback: number): number {
@@ -50,6 +47,13 @@ export function enumParam<T extends string>(value: string | undefined, name: str
     throw new QueryError(allowed.length === 2 ? `${name} must be '${allowed[0]}' or '${allowed[1]}'.` : `${name} must be one of: ${allowed.join(", ")}.`);
   }
   return value as T;
+}
+
+type SendOptions = Parameters<typeof sendJsonWithEtag>[3];
+
+/** Every v1 JSON answer: with a weak ETag, 304 when it matches, and a module's reminder for the person behind the request on top. */
+export function sendV1(req: FastifyRequest, reply: FastifyReply, body: object, opts: SendOptions) {
+  return sendJsonWithNotice(req, reply, body, requestNotice("json", req), opts);
 }
 
 /** Wraps a v1 handler with shared error mapping. Errors never leak internals. */
@@ -70,6 +74,7 @@ export function publicHandler(fn: Handler): Handler {
         });
       }
       if (error instanceof SearchBusyError) {
+        req.log = req.log.child({ reason: "search_capacity_exhausted" });
         return sendProblem(req, reply, { status: 503, code: "temporarily_unavailable", detail: "Search is busy; retry later.", retryAfter: error.retryAfter });
       }
       req.log.error({ err: error, path: req.url.split("?")[0] }, "public api error");
@@ -94,15 +99,13 @@ export function registerV1(app: FastifyInstance) {
     const limit = intParam(q.limit, "limit", 1, 100, 50);
     if (q.cursor !== undefined && q.cursor.length === 0) throw new InvalidCursorError("empty cursor");
     const body = await v1Items({ mode, window, by, category, q: search, limit, cursor: q.cursor ?? null });
-    return sendJsonWithEtag(req, reply, body, { etagPrefix: "v1-items", cacheControl: V1_OPERATIONS.items.cacheControl });
+    return sendV1(req, reply, body, { etagPrefix: "v1-items", cacheControl: V1_OPERATIONS.items.cacheControl });
   }));
-
-  if (FEATURES.codexResetMonitor) registerCodexResets(app);
 
   app.get("/api/v1/hot-topics", publicHandler(async (req, reply) => {
     strictQuery(req, V1_OPERATIONS.hotTopics.queryKeys);
     const body = await v1HotTopics();
-    return sendJsonWithEtag(req, reply, body, { etagPrefix: "v1-hot", cacheControl: V1_OPERATIONS.hotTopics.cacheControl });
+    return sendV1(req, reply, body, { etagPrefix: "v1-hot", cacheControl: V1_OPERATIONS.hotTopics.cacheControl });
   }));
 
   app.get("/api/v1/stories/:publicId", publicHandler(async (req, reply) => {
@@ -115,20 +118,20 @@ export function registerV1(app: FastifyInstance) {
     }
     const body = found.kind === "found" ? await v1Story(found.storyId) : null;
     if (!body) return sendProblem(req, reply, { status: 404, code: "not_found", detail: `No public story exists for ${publicId}.`, cacheControl: "public, max-age=60" });
-    return sendJsonWithEtag(req, reply, body, { etagPrefix: "v1-story", cacheControl: V1_OPERATIONS.storyByPublicId.cacheControl });
+    return sendV1(req, reply, body, { etagPrefix: "v1-story", cacheControl: V1_OPERATIONS.storyByPublicId.cacheControl });
   }));
 
   app.get("/api/v1/dailies", publicHandler(async (req, reply) => {
     const q = strictQuery(req, V1_OPERATIONS.dailies.queryKeys);
     const limit = intParam(q.limit, "limit", 1, 180, 30);
-    return sendJsonWithEtag(req, reply, await v1Dailies(limit), { etagPrefix: "v1-dailies", cacheControl: V1_OPERATIONS.dailies.cacheControl });
+    return sendV1(req, reply, await v1Dailies(limit), { etagPrefix: "v1-dailies", cacheControl: V1_OPERATIONS.dailies.cacheControl });
   }));
 
   app.get("/api/v1/dailies/latest", publicHandler(async (req, reply) => {
     strictQuery(req, V1_OPERATIONS.latestDaily.queryKeys);
     const body = await v1Daily("latest");
     if (!body) return sendProblem(req, reply, { status: 404, code: "not_found", detail: "No daily report has been published yet." });
-    return sendJsonWithEtag(req, reply, body, { etagPrefix: "v1-daily", cacheControl: V1_OPERATIONS.latestDaily.cacheControl });
+    return sendV1(req, reply, body, { etagPrefix: "v1-daily", cacheControl: V1_OPERATIONS.latestDaily.cacheControl });
   }));
 
   app.get("/api/v1/dailies/:date", publicHandler(async (req, reply) => {
@@ -137,7 +140,7 @@ export function registerV1(app: FastifyInstance) {
     if (!isValidDate(date)) throw new QueryError("date must be a real YYYY-MM-DD calendar date.");
     const body = await v1Daily(date);
     if (!body) return sendProblem(req, reply, { status: 404, code: "not_found", detail: `No daily report exists for ${date}.`, cacheControl: "public, max-age=60" });
-    return sendJsonWithEtag(req, reply, body, { etagPrefix: "v1-daily", cacheControl: V1_OPERATIONS.dailyByDate.cacheControl });
+    return sendV1(req, reply, body, { etagPrefix: "v1-daily", cacheControl: V1_OPERATIONS.dailyByDate.cacheControl });
   }));
 
   // Weeklies and monthlies: an index, the latest issue and one issue by ISO week or month.
@@ -148,13 +151,13 @@ export function registerV1(app: FastifyInstance) {
     app.get(`/api/v1/${p.path}`, publicHandler(async (req, reply) => {
       const q = strictQuery(req, p.index.queryKeys);
       const limit = intParam(q.limit, "limit", 1, 60, 12);
-      return sendJsonWithEtag(req, reply, await v1Periods(p.kind, limit), { etagPrefix: `v1-${p.path}`, cacheControl: p.index.cacheControl });
+      return sendV1(req, reply, await v1Periods(p.kind, limit), { etagPrefix: `v1-${p.path}`, cacheControl: p.index.cacheControl });
     }));
     app.get(`/api/v1/${p.path}/latest`, publicHandler(async (req, reply) => {
       strictQuery(req, p.latest.queryKeys);
       const body = await v1Period(p.kind, "latest");
       if (!body) return sendProblem(req, reply, { status: 404, code: "not_found", detail: `No ${p.name} report has been published yet.` });
-      return sendJsonWithEtag(req, reply, body, { etagPrefix: `v1-${p.name}`, cacheControl: p.latest.cacheControl });
+      return sendV1(req, reply, body, { etagPrefix: `v1-${p.name}`, cacheControl: p.latest.cacheControl });
     }));
     app.get(`/api/v1/${p.path}/:${p.param}`, publicHandler(async (req, reply) => {
       strictQuery(req, p.byKey.queryKeys);
@@ -162,7 +165,7 @@ export function registerV1(app: FastifyInstance) {
       if (!isPeriodKey(p.kind, key)) throw new QueryError(`${p.param} must be ${p.form}.`);
       const body = await v1Period(p.kind, key);
       if (!body) return sendProblem(req, reply, { status: 404, code: "not_found", detail: `No ${p.name} report exists for ${key}.`, cacheControl: "public, max-age=60" });
-      return sendJsonWithEtag(req, reply, body, { etagPrefix: `v1-${p.name}`, cacheControl: p.byKey.cacheControl });
+      return sendV1(req, reply, body, { etagPrefix: `v1-${p.name}`, cacheControl: p.byKey.cacheControl });
     }));
   }
 
@@ -173,7 +176,7 @@ export function registerV1(app: FastifyInstance) {
     const body = await selectedSnapshot({ fields, limit, page: q.page ?? null });
     // asOf (and the next-page token that carries it) differ per request; the page content does not.
     const etagOf = { fields: body.fields, cursor: body.cursor, count: body.count, hasMore: body.hasMore, items: body.items };
-    return sendJsonWithEtag(req, reply, body, { etagPrefix: "v1-snapshot", cacheControl: V1_OPERATIONS.selectedSnapshot.cacheControl, etagOf });
+    return sendV1(req, reply, body, { etagPrefix: "v1-snapshot", cacheControl: V1_OPERATIONS.selectedSnapshot.cacheControl, etagOf });
   }));
 
   app.get("/api/v1/selected/changes", publicHandler(async (req, reply) => {
@@ -181,26 +184,26 @@ export function registerV1(app: FastifyInstance) {
     const limit = intParam(q.limit, "limit", 1, 100, 100);
     if (!q.cursor) throw new SnapshotRequiredError("missing cursor");
     const body = await selectedChanges({ cursor: q.cursor, limit });
-    return sendJsonWithEtag(req, reply, body, { etagPrefix: "v1-changes", cacheControl: V1_OPERATIONS.selectedChanges.cacheControl });
+    return sendV1(req, reply, body, { etagPrefix: "v1-changes", cacheControl: V1_OPERATIONS.selectedChanges.cacheControl });
   }));
 }
 
-/** The Codex reset monitor's endpoints (an optional module, industry/features.ts). */
-function registerCodexResets(app: FastifyInstance) {
-  app.get("/api/v1/codex-resets", publicHandler(async (req, reply) => {
-    strictQuery(req, V1_OPERATIONS.codexResets.queryKeys);
-    // The full archive points recurring readers at the lighter representation.
-    reply.header("Link", `<${config.siteUrl}/api/v1/codex-resets/recent>; rel="alternate"; type="application/json"`);
-    const body = await codexResetsSnapshot();
-    return sendJsonWithEtag(req, reply, body, { etagPrefix: "v1-codex-resets", cacheControl: V1_OPERATIONS.codexResets.cacheControl });
-  }));
+const notAllowed: Handler = async (req, reply) => {
+  applyPublicHeaders(reply);
+  reply.header("Allow", "GET, HEAD, OPTIONS");
+  return sendProblem(req, reply, { status: 405, code: "method_not_allowed", detail: "This endpoint supports only GET, HEAD, and OPTIONS." });
+};
+const preflight: Handler = async (_req, reply) => {
+  applyPublicHeaders(reply);
+  return reply.code(204).header("Cache-Control", "public, max-age=86400").send();
+};
 
-  // The same snapshot limited to the last week and the events still waiting to land: what a poller needs.
-  app.get("/api/v1/codex-resets/recent", publicHandler(async (req, reply) => {
-    strictQuery(req, V1_OPERATIONS.codexResetsRecent.queryKeys);
-    const body = await codexResetsRecent();
-    return sendJsonWithEtag(req, reply, body, { etagPrefix: "v1-codex-resets-recent", cacheControl: V1_OPERATIONS.codexResetsRecent.cacheControl });
-  }));
+/** A read-only public address (a path or a wildcard): CORS preflight, and 405 for any other method. */
+export function readOnlyMethods(app: FastifyInstance, url: string) {
+  app.options(url, preflight);
+  // A read-only operation never interprets a rejected method's body: even malformed JSON and
+  // unsupported media types must receive the same 405 and readable public error headers.
+  app.route({ method: ["POST", "PUT", "PATCH", "DELETE", "TRACE"], url, onRequest: notAllowed, handler: notAllowed });
 }
 
 /** Registered last: CORS preflight, 405 for other methods, Problem 404 for undefined v1 paths. */
@@ -215,21 +218,7 @@ export function registerV1Fallbacks(app: FastifyInstance) {
       detail: `No public API v1 operation exists at ${path}. Recent items are at /api/v1/items; every operation is listed at ${config.siteUrl}/openapi-v1.json`,
     });
   };
-  const notAllowed: Handler = async (req, reply) => {
-    applyPublicHeaders(reply);
-    reply.header("Allow", "GET, HEAD, OPTIONS");
-    return sendProblem(req, reply, { status: 405, code: "method_not_allowed", detail: "This endpoint supports only GET, HEAD, and OPTIONS." });
-  };
-  const preflight: Handler = async (_req, reply) => {
-    applyPublicHeaders(reply);
-    return reply.code(204).header("Cache-Control", "public, max-age=86400").send();
-  };
-  for (const url of ["/api/v1", "/api/v1/*", "/openapi-v1.json"]) {
-    app.options(url, preflight);
-    // A read-only operation never interprets a rejected method's body: even malformed JSON and
-    // unsupported media types must receive the same 405 and readable public error headers.
-    app.route({ method: ["POST", "PUT", "PATCH", "DELETE", "TRACE"], url, onRequest: notAllowed, handler: notAllowed });
-  }
+  for (const url of ["/api/v1", "/api/v1/*", "/openapi-v1.json"]) readOnlyMethods(app, url);
   app.get("/api/v1", notFound);
   app.get("/api/v1/*", notFound);
 }

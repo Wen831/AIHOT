@@ -1,8 +1,10 @@
 // Public read layer, item level. Every exit (site API, v1, RSS, MCP, sitemap) reads
 // items through these columns and views; which rows are public is decided by scope.ts.
-import type { CategoryKey, ChannelKey } from "@aihot/contracts/taxonomy";
+import { CATEGORY_KEYS, toPublicApiCategory, type CategoryKey, type ChannelKey, type PublicApiCategoryKey } from "@aihot/contracts/taxonomy";
 import type { FeedItemSummary, ItemSummary, MediaView, ShowcaseStats, XPostView } from "@aihot/contracts/site";
+import { POLICY } from "@aihot/site";
 import { sql, type Db } from "../db.ts";
+import { isEmptyOrLinkOnly } from "../content/posts.ts";
 import { proxiedImage, proxiedImageSet } from "../media/imgproxy.ts";
 import { displayTags, publicSourceName } from "./rules.ts";
 import { seatedCondition } from "./scope.ts";
@@ -75,11 +77,17 @@ export function channelCondition(channel: ChannelKey | null | undefined) {
   return sql`AND p.channel = ${channel}`;
 }
 
-export function categoryCondition(category: CategoryKey | null | undefined, v1 = false) {
+/** The website's filter: one of its own categories. */
+export function categoryCondition(category: CategoryKey | null | undefined) {
   if (!category) return sql``;
-  // The demo industry published opinion under the tip key on v1/RSS; the football taxonomy has no tip
-  // category, so the one-to-one match below is all this deployment needs.
+  // The football taxonomy has no tip category, so the one-to-one match below is all this deployment needs.
   return sql`AND p.category = ${category}`;
+}
+
+/** The public API's, RSS's and MCP's filter: every category the site publishes as this one (PUBLIC_CATEGORIES). */
+export function publicCategoryCondition(category: PublicApiCategoryKey | null | undefined) {
+  if (!category) return sql``;
+  return sql`AND p.category IN ${sql(CATEGORY_KEYS.filter((k) => toPublicApiCategory(k) === category))}`;
 }
 
 export function tagCondition(tag: string | null | undefined) {
@@ -109,7 +117,7 @@ export function xView(row: Pick<ItemRow, "x_post" | "zh_text"> & Partial<Pick<It
   const quoted = x.quoted && typeof x.quoted === "object"
     ? {
       authorName: String(x.quoted.authorName ?? ""), handle: String(x.quoted.handle ?? ""), text: String(x.quoted.text ?? ""), url: String(x.quoted.url ?? ""),
-      translation: row.quoted_zh && row.quoted_zh.trim() !== String(x.quoted.text ?? "").trim() ? row.quoted_zh : null,
+      translation: !isEmptyOrLinkOnly(String(x.quoted.text ?? "")) && row.quoted_zh && row.quoted_zh.trim() !== String(x.quoted.text ?? "").trim() ? row.quoted_zh : null,
     }
     : null;
   const media = ((x.media ?? []) as Array<Record<string, any>>)
@@ -122,7 +130,7 @@ export function xView(row: Pick<ItemRow, "x_post" | "zh_text"> & Partial<Pick<It
     avatarUrl: proxiedImage(x.avatarUrl, "avatar"),
     ...(avatarSrcSet ? { avatarSrcSet } : {}),
     text: String(x.text ?? ""),
-    translation: row.zh_text && row.zh_text.trim() !== String(x.text ?? "").trim() ? row.zh_text : null,
+    translation: !isEmptyOrLinkOnly(String(x.text ?? "")) && row.zh_text && row.zh_text.trim() !== String(x.text ?? "").trim() ? row.zh_text : null,
     quoted,
     // A multi-image list grid is 112 CSS px wide; one image can be 240 px. Keep 3x pixels for both.
     // Detail retains full media for the lightbox; srcSet bounds the displayed image.
@@ -144,6 +152,14 @@ export function showcaseView(row: Pick<ItemRow, "showcase_stats">): ShowcaseStat
     firstAt: iso(s.firstAt, now),
     measuredAt: iso(s.measuredAt, now),
   };
+}
+
+/**
+ * Whether pages show an X post's own text and media. A site that counts them as full text shows them
+ * only where the source allows full text, as it does an article's body.
+ */
+export function showsPost(row: { channel: string; body_mode: string }): boolean {
+  return row.channel === "x" && (!POLICY.xPostIsFullText || row.body_mode === "full");
 }
 
 /** The shared public article; its X post is added as each answer shows it. */
@@ -172,10 +188,9 @@ export function toItemSummary(row: ItemRow): ItemSummary {
 /** Project the shared public article into the exact fields a site card renders. */
 export function toFeedItemSummary(row: ItemRow): FeedItemSummary {
   const item = toItemSummary(row);
-  // An X post's own text and media are its body: shown only where the source allows full text.
-  const x = row.channel === "x" && row.body_mode === "full" ? xView(row, true) : null;
+  const x = showsPost(row) ? xView(row, true) : null;
   return {
-    id: item.id, title: item.title, summary: item.summary, reason: item.reason,
+    id: item.id, title: item.title, summary: item.summary ?? (x?.text || null), reason: item.reason,
     source: item.source, publishedAt: item.publishedAt, timelineAt: item.timelineAt,
     category: item.category, tags: item.tags, score: item.score, selected: item.selected, channel: item.channel,
     showcase: item.showcase,

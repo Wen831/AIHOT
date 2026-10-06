@@ -37,9 +37,10 @@ after(async () => {
   await closeDb();
 });
 
+/** A delivery that sends the card it stored (a selected article's card is built afresh instead). */
 async function delivery(status = "unknown") {
   const [row] = await sql<{ id: number }[]>`INSERT INTO deliveries (target_key, subject_kind, subject_id, dedupe_key, status)
-    VALUES (${TARGET}, 'codex_reset', 'test', ${`${T}-${ids.length}`}, ${status}) RETURNING id`;
+    VALUES (${TARGET}, 'test', 'test', ${`${T}-${ids.length}`}, ${status}) RETURNING id`;
   ids.push(row.id);
   await sql`UPDATE deliveries SET payload = ${sql.json({ id: row.id })} WHERE id = ${row.id}`;
   return row.id;
@@ -96,8 +97,8 @@ async function selectedItem() {
   await sql`INSERT INTO sources (id, name, kind, tier) VALUES (${TARGET}, 'Delivery test', 'rss', 'T1') ON CONFLICT DO NOTHING`;
   await sql`INSERT INTO articles (id, source_id, identity_key, url, title, discovered_at, timeline_at)
     VALUES (${id}, ${TARGET}, ${id}, 'https://example.com/delivery', ${id}, now(), now())`;
-  await sql`INSERT INTO publications (article_id, title, source_id, channel, url, discovered_at, timeline_at, sort_at, eligible, selected, visible_after, visibility)
-    VALUES (${id}, ${id}, ${TARGET}, 'news', 'https://example.com/delivery', now(), now(), now(), true, true, now() - interval '1 minute', 'public')`;
+  await sql`INSERT INTO publications (article_id, title, source_id, channel, url, published_at, discovered_at, timeline_at, sort_at, eligible, selected, visible_after, visibility)
+    VALUES (${id}, ${id}, ${TARGET}, 'news', 'https://example.com/delivery', now(), now(), now(), now(), true, true, now() - interval '1 minute', 'public')`;
   return id;
 }
 
@@ -211,7 +212,7 @@ test("concurrent sibling claims reserve a target once, including the pending del
   const subjects = [`${T}-sibling-a`, `${T}-sibling-b`];
   const before = requests.length;
   const done = Promise.all(subjects.map((subjectId) => deliverContent({
-    subjectKind: "codex_reset", subjectId, dedupeKey: subjectId, contentAt: new Date(), card: { id: 999 }, siblings: subjects,
+    subjectKind: "test", subjectId, dedupeKey: subjectId, contentAt: new Date(), card: { id: 999 }, siblings: subjects,
   })));
   try {
     const deadline = performance.now() + 5000;

@@ -2,13 +2,16 @@
 // manual overrides and grouping, then record selected-set changes in the sync ledger.
 // Rebuilding only re-reads stored results; it never calls a model.
 import { toPublicApiCategory } from "@aihot/contracts/taxonomy";
-import { SITE } from "@aihot/industry/site";
+import { SITE } from "@aihot/site";
 import { one, sql, type Tx } from "../db.ts";
 import { sha256, stableJson } from "../lib/ids.ts";
 import { collapseWhitespace } from "../lib/text.ts";
+import type { XPostData } from "../content/materials.ts";
+import { originalPostCopy } from "../content/posts.ts";
 import { itemUrl } from "./links.ts";
 import { pickRepresentative, REPRESENTATIVE_COLUMNS, type RepresentativeIdentity } from "./representative.ts";
 import { enqueue, QUEUES, shutdownSignal } from "../jobs/queue.ts";
+import { emit } from "../modules.ts";
 import {
   bodyModeOf, channelOf, displayTags, isIndexable, isPoolEligible, isSelectable, mayRedistribute, publicSourceName, type SourceFacts,
 } from "./rules.ts";
@@ -26,7 +29,8 @@ interface ArticleRow {
   backfill: boolean;
   body_status: string;
   body_text: string | null;
-  x_post: unknown;
+  x_post: XPostData | null;
+  x_article: { text?: string } | null;
   grouped_at: Date | null;
   grouping_status: "pending" | "complete" | "failed";
   selection_adds_value: boolean | null;
@@ -67,6 +71,14 @@ interface PublicationRow {
   tags: string[];
   score: number | null;
   body_mode: string;
+  syndicate: boolean;
+  url: string;
+  channel: string;
+  published_at: Date | null;
+  discovered_at: Date;
+  timeline_at: Date;
+  sort_at: Date;
+  backfill: boolean;
   story_id: number | null;
   fact_id: number | null;
   selected_ready_at: Date | null;
@@ -101,6 +113,8 @@ export interface PublishOptions {
 export interface PublishResult {
   articleId: string;
   changed: boolean;
+  /** First prepared content or selection only adds to its detail; corrections also change what lists show. */
+  changeKind: "detail" | "content";
   selected: boolean;
   visibility: string;
   ledger: "upsert" | "remove" | null;
@@ -205,13 +219,22 @@ async function syncLedger(tx: Tx, articleId: string, now: Date): Promise<"upsert
 }
 
 export async function publishArticle(articleId: string, options: PublishOptions = {}): Promise<PublishResult | null> {
-  return sql.begin((tx) => publishArticleTx(tx, articleId, options));
+  return sql.begin(async (tx) => {
+    await tx`SELECT 1 FROM articles WHERE id = ${articleId} FOR UPDATE`;
+    const [previous] = await tx<{ story_id: number | null }[]>`SELECT story_id FROM publications WHERE article_id = ${articleId}`;
+    const result = await publishArticleTx(tx, articleId, options);
+    // Body and translation writes announce their own changes; an unchanged projection needs no purge.
+    if (previous && result?.changed) await emit("articleChanged", {
+      id: articleId, reason: "republication", kind: result.changeKind, reduced: result.reduced, previousStoryIds: previous.story_id === null ? [] : [previous.story_id],
+    }, tx);
+    return result;
+  });
 }
 
 export async function publishArticleTx(tx: Tx, articleId: string, options: PublishOptions = {}): Promise<PublishResult | null> {
   const [article] = await tx<ArticleRow[]>`
     SELECT id, source_id, url, title, language, published_at, discovered_at, timeline_at, backfill, body_status,
-           body_text, x_post, grouped_at, grouping_status, selection_adds_value
+           body_text, x_post, x_article, grouped_at, grouping_status, selection_adds_value
     FROM articles WHERE id = ${articleId} FOR UPDATE`;
   if (!article) return null;
   // Explicit imports carry an already-public editorial decision, not a new pending judgement.
@@ -246,8 +269,9 @@ export async function publishArticleTx(tx: Tx, articleId: string, options: Publi
   // An X post carries its Chinese in the summary and translation; without a Chinese title its own
   // text is the title, where an article would still be a half-finished card.
   const zhTitle = analysis?.title_zh?.trim() ? analysis.title_zh : null;
-  const title = pickString(f.title, zhTitle ?? (isChineseTitle || article.x_post ? collapseWhitespace(article.title) : null));
-  const summary = pickString(f.summary, analysis?.summary_zh ?? null);
+  const original = originalPostCopy(article.x_post, article.url, article.x_article);
+  const title = pickString(f.title, original?.title ?? zhTitle ?? (isChineseTitle || article.x_post ? collapseWhitespace(article.title) : null));
+  const summary = pickString(f.summary, original ? original.summary : analysis?.summary_zh ?? null);
   const category = pickString(f.category, analysis?.category ?? null);
   const tags = Array.isArray(f.tags) ? (f.tags as string[]) : [...new Set([...(analysis?.tags ?? []), ...(analysis?.subjects ?? []).map((s) => `entity:${s}`)])];
   const score = typeof f.score === "number" ? f.score : analysis?.score ?? null;
@@ -256,16 +280,20 @@ export async function publishArticleTx(tx: Tx, articleId: string, options: Publi
   // Material from an isolated source reaches no public surface at all: not even a detail page.
   const visibility = source.participation_mode === "isolated" ? "withdrawn" : (override?.visibility ?? "public");
 
-  const eligible = isPoolEligible({ participationMode: source.participation_mode, relevance, title, summary });
+  // An undated archive has a readable detail page, but its discovery is not a news timestamp.
+  // Explicit imports can retain an editorial decision already published elsewhere.
+  const eligible = isPoolEligible({ participationMode: source.participation_mode, relevance, title, summary, originalPost: !!original })
+    && (!article.backfill || article.published_at !== null || !!options.releasedAt);
   const selectionCandidate = isSelectable(eligible, judgedSelected, source.tier);
   // Scoring nominates a report; a completed identity/value decision admits it to selection.
   // A historical import already has its public decision. Preserve that confirmed state on rebuild.
   const selected = selectionCandidate && article.grouping_status === "complete"
     && (f.selected === true || article.selection_adds_value !== false);
-  const reason = selected ? pickString(f.reason, analysis?.reason_zh ?? null) : null;
+  const reason = selected ? pickString(f.reason, original ? null : analysis?.reason_zh ?? null) : null;
   const hasXPost = !!article.x_post;
   const channel = channelOf(source.kind, hasXPost);
-  const bodyMode = bodyModeOf(source, article.body_status, !!article.body_text && article.body_text.length > 0);
+  const hasBody = !!article.body_text || !!article.x_post?.text || !!article.x_post?.media?.length || !!article.x_post?.quoted?.text;
+  const bodyMode = bodyModeOf(source, article.body_status, hasBody);
   const syndicate = mayRedistribute(source, bodyMode);
   const originalTitle = isChineseTitle && title === collapseWhitespace(article.title) ? null : collapseWhitespace(article.title);
 
@@ -275,7 +303,7 @@ export async function publishArticleTx(tx: Tx, articleId: string, options: Publi
   const visibleAfter = selected ? (previous?.selected && previous.visible_after ? previous.visible_after : options.releasedAt ?? now) : null;
 
   const indexable = isIndexable({
-    visibility, hasSummary: !!summary, selected, seoIndexedAt: previous?.seo_indexed_at ?? null, seoExcludedAt: previous?.seo_excluded_at ?? null,
+    visibility, sourceMode: source.participation_mode, hasSummary: !!summary, selected, seoIndexedAt: previous?.seo_indexed_at ?? null, seoExcludedAt: previous?.seo_excluded_at ?? null,
   });
   const searchText = collapseWhitespace(
     [title, originalTitle, summary, publicSourceName(source.name), ...displayTags(tags), ...(analysis?.subjects ?? [])].filter(Boolean).join(" "),
@@ -294,18 +322,30 @@ export async function publishArticleTx(tx: Tx, articleId: string, options: Publi
     source_id: source.id, first_party: source.tier === "T1",
     visibility, eligible, selected, selection_candidate: selectionCandidate, title: title ?? collapseWhitespace(article.title), original_title: originalTitle, summary, reason,
     category, tags, score: round1(score), body_mode: bodyMode, story_id: membership?.story_id ?? null, fact_id: membership?.fact_id ?? null,
-    indexable,
+    indexable, url: article.url, channel, syndicate, published_at: article.published_at, discovered_at: article.discovered_at,
+    timeline_at: article.timeline_at, backfill: article.backfill, sort_at: sortAt, visible_after: visibleAfter,
   };
-  const changed =
-    !previous ||
-    stableJson({ ...next, tags: [...next.tags].sort() }) !==
-      stableJson({
-        source_id: previous.source_id, first_party: previous.first_party,
-        visibility: previous.visibility, eligible: previous.eligible, selected: previous.selected, selection_candidate: previous.selection_candidate, title: previous.title,
-        original_title: previous.original_title, summary: previous.summary, reason: previous.reason, category: previous.category,
-        tags: [...previous.tags].sort(), score: previous.score === null ? null : Number(previous.score), body_mode: previous.body_mode,
-        story_id: previous.story_id, fact_id: previous.fact_id, indexable: previous.indexable,
-      });
+  const before = previous ? { ...previous, tags: [...previous.tags].sort(), score: previous.score === null ? null : Number(previous.score) } : null;
+  const after = { ...next, tags: [...next.tags].sort() };
+  const changedFields = (Object.keys(after) as Array<keyof typeof after>).filter((key) => !before || stableJson(after[key]) !== stableJson(before[key]));
+  const changed = changedFields.length > 0;
+  const admissionFields = new Set<keyof typeof after>(["selected", "reason", "indexable", "story_id", "fact_id", "sort_at", "visible_after"]);
+  const admission = previous && !previous.selected && selected
+    && (previous.story_id === null || previous.story_id === next.story_id)
+    && (previous.fact_id === null || previous.fact_id === next.fact_id)
+    && changedFields.every((key) => admissionFields.has(key));
+  const firstAnalysisFields = new Set<keyof typeof after>([...admissionFields, "eligible", "selection_candidate", "title", "original_title", "summary", "category", "tags", "score"]);
+  const firstAnalysis = previous && !previous.eligible && !previous.summary && previous.visibility === "public" && visibility === "public" && eligible
+    && (previous.story_id === null || previous.story_id === next.story_id)
+    && (previous.fact_id === null || previous.fact_id === next.fact_id)
+    && changedFields.every((key) => firstAnalysisFields.has(key));
+  // A first event link is new metadata, like the first judgement or selection: a detail change.
+  // Established identities and corrected text change what lists show.
+  const firstIdentity = previous && !previous.selected && previous.fact_id === null && previous.story_id === null
+    && previous.visibility === "public" && visibility === "public" && eligible && next.story_id !== null
+    && changedFields.every((key) => admissionFields.has(key));
+  const initial = (admission || firstAnalysis || firstIdentity) && !(await tx`SELECT 1 FROM selected_state WHERE article_id = ${articleId}`).length;
+  const changeKind = initial ? "detail" : "content";
   const revision = previous ? previous.revision + (changed ? 1 : 0) : 1;
 
   await tx`
@@ -373,7 +413,7 @@ export async function publishArticleTx(tx: Tx, articleId: string, options: Publi
       (previous!.visibility === "public" && visibility !== "public") ||
       (previous!.selected && !selected) ||
       (previous!.body_mode === "full" && bodyMode !== "full"));
-  return { articleId, changed, selected, visibility, ledger, reduced };
+  return { articleId, changed, changeKind, selected, visibility, ledger, reduced };
 }
 
 /**
@@ -403,7 +443,8 @@ export async function republishSource(sourceId: string, onProgress?: (done: numb
     for (const { article_id } of batch) {
       // Stopping mid-way is safe: the job is retried after the restart and re-derives from the start.
       if (shutdownSignal.signal.aborted) throw new Error("worker is stopping; republish resumes after restart");
-      const r = await publishArticle(article_id);
+      // The source job refreshes all its exits once when the batch is complete.
+      const r = await sql.begin(tx => publishArticleTx(tx, article_id));
       if (r?.changed) changed += 1;
       if (r?.reduced) reduced += 1;
     }

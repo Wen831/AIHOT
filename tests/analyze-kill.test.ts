@@ -1,7 +1,8 @@
 // A hard-killed analysis must distinguish a lost paid answer from one already saved.
 // These are real processes and PostgreSQL transactions with a local model protocol substitute;
 // they do not test provider quality, machine power loss, or a browser journey.
-import { gate, stub, tag } from "./setup.ts";
+import { gate, pointModels, stub, tag } from "./setup.ts";
+import { analysisStep, SELECTING_SCORE, type AnalysisStep } from "./analysis-steps.ts";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
@@ -14,24 +15,20 @@ import { autoReleaseUnknownReceipts } from "@aihot/backend/operations/recover";
 
 const T = tag();
 const SOURCE = `test-analyze-kill-${T}`;
-type Step = "prefilter" | "score" | "structure" | "understand";
-let calls: Step[] = [];
+let calls: AnalysisStep[] = [];
 let holdPrefilter: { asked: ReturnType<typeof gate<void>>; answer: ReturnType<typeof gate<void>> } | null = null;
 const provider = await stub(async (_hit, request) => {
-  const body = JSON.parse(request.body);
-  const system = String(body.messages[0]?.content ?? "");
-  const step: Step = system.includes("宽召回的足球与国内新闻相关性预筛") ? "prefilter"
-    : system.includes("事件注意力评分器") ? "score" : system.includes("资料结构化助手") ? "structure" : "understand";
+  const step = analysisStep(request.body);
   calls.push(step);
   if (step === "prefilter" && holdPrefilter) {
     const held = holdPrefilter;
     held.asked.open();
     await held.answer.promise;
   }
-  const content = step === "prefilter" ? { label: "PASS", reason: "transfer news" }
-    : step === "score" ? { attentionScore: 80 }
-      : step === "structure" ? { category: "transfer", tags: ["转会官宣"], subjects: [], fact: { title: "新援官宣" } }
-        : { itemType: "transfer_deal", authorRole: "principal", tags: ["转会官宣"], editorialJudgment: "签约有实质进展", titleZh: `新援官宣 ${T}`, summaryZh: "俱乐部官宣签下新援。" };
+  const content = step === "prefilter" ? { label: "PASS", reason: "AI model release" }
+    : step === "score" ? { attentionScore: SELECTING_SCORE }
+      : step === "structure" ? { category: "ai-models", tags: ["模型发布"], subjects: [], fact: { title: "新模型发布" } }
+        : { itemType: "model_release", authorRole: "principal", tags: ["模型发布"], editorialJudgment: "模型有明确的能力提升", titleZh: `新模型发布 ${T}`, summaryZh: "模型发布并提供了评测和价格。" };
   return { id: `stub-${calls.length}`, choices: [{ message: { content: JSON.stringify(content) } }], usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 } };
 });
 
@@ -59,10 +56,7 @@ function worker(articleId: string) {
     ...process.env, TEST_ARTICLE_ID: articleId, MODEL_CALLS_ENABLED: "true", COLLECT_ENABLED: "false",
     AIHOT_CREDENTIALS_DIR: "/nonexistent-test-credentials", FEISHU_INTERNAL_ENABLED: "false",
   };
-  for (const name of ["DASHSCOPE", "ZHIPU", "DEEPSEEK", "XIAOMI_MIMO"]) {
-    env[`${name}_BASE_URL`] = `${provider.url}/v1`;
-    env[`${name}_API_KEY`] = "test-key";
-  }
+  pointModels(provider.url, ["qwen3.7-flash", "glm-5.3-flash", "deepseek-flash", "mimo-v2.6-flash"], env);
   const child = spawn(process.execPath, ["--input-type=module", "-e", script], { cwd: process.cwd(), env, stdio: ["ignore", "ignore", "pipe", "ipc"] });
   children.add(child);
   let message: WorkerMessage | undefined;
@@ -100,8 +94,8 @@ async function kill(running: ReturnType<typeof worker>) {
 
 async function article(scenario: string) {
   const { articleId } = await upsertMaterial({
-    sourceId: SOURCE, url: `https://example.org/analyze-kill-${T}/${scenario}`, title: `Transfer news ${T} ${scenario}`,
-    bodyText: `A club announced a new signing with contract details. ${T} ${scenario} ` + "The announcement explains the transfer fee and contract length. ".repeat(10),
+    sourceId: SOURCE, url: `https://example.org/analyze-kill-${T}/${scenario}`, title: `AI model release ${T} ${scenario}`,
+    bodyText: `An AI lab released a new model with benchmarks and prices. ${T} ${scenario} ` + "The release explains model capabilities and evaluation results. ".repeat(10),
     bodyStatus: "ok", language: "en", via: "fetch", publishedAt: new Date(),
   });
   return articleId;
@@ -198,7 +192,7 @@ test("SIGKILL after responses are saved but before the business commit reuses al
   assert.equal(calls.length, 5, "restart sent no additional model requests");
   const [analysis] = await sql`SELECT selected,score,receipt_ids FROM analyses WHERE article_id=${articleId}`;
   assert.equal(analysis?.selected, true);
-  assert.equal(Number(analysis?.score), 80);
+  assert.equal(Number(analysis?.score), SELECTING_SCORE);
   assert.deepEqual(analysis!.receipt_ids.map(String).sort(), receivedIds.slice().sort());
   assert.equal((await sql`SELECT 1 FROM receipts WHERE subject=${subject} AND status='completed'`).length, 5);
   assert.equal((await sql`SELECT 1 FROM receipt_attempts a JOIN receipts r ON r.id=a.receipt_id WHERE r.subject=${subject}`).length, 5);

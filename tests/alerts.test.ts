@@ -89,7 +89,7 @@ test("backup failures still escalate after fifty hours without a success", async
     await sql`DELETE FROM settings WHERE key = 'backup.last'`;
     assert.equal((await backup())[0]?.level, "today", "never-successful backups must also escalate");
     await sql`UPDATE job_runs SET started_at = ${new Date(now)}, finished_at = ${new Date(now)} WHERE job = 'ops.backup'`;
-    assert.equal((await backup())[0]?.level, "digest", "a first failed attempt does not claim two days of failure");
+    assert.equal((await backup())[0]?.level, "later", "a first failed attempt does not claim two days of failure");
   } finally {
     for (const key of Object.keys(process.env)) if (key.startsWith("DB_BACKUP_STORE_")) delete process.env[key];
   }
@@ -195,7 +195,6 @@ test("the ops digest does not describe unknown paid work as harmless or already 
     console.log = log;
     if (enabled === undefined) delete process.env.FEISHU_INTERNAL_ENABLED;
     else process.env.FEISHU_INTERNAL_ENABLED = enabled;
-    await sql`DELETE FROM receipts WHERE logical_key='digest-unknown-impact'`;
   }
 });
 
