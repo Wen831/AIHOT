@@ -4,16 +4,16 @@
 // Publication keeps showcase out of the daily report, selection and heat (publication/rules.ts,
 // events/hot.ts) while isPoolEligible/hasItemPage let it into /all and a detail page.
 import { z } from "zod";
-import { sql } from "../db.ts";
-import { chatJson } from "../providers/llm.ts";
-import { completeReceipt } from "../providers/receipts.ts";
-import { collapseWhitespace } from "../lib/text.ts";
-import { modelFor } from "./models.ts";
-import { loadAnalyzeInput, type AnalyzeInputArticle } from "./input.ts";
-import { clampText, parseTranslateOutput } from "./writing.ts";
-import { promptText, promptVersion } from "./prompts.ts";
+import { sql } from "@aihot/backend/db";
+import { chatJson } from "@aihot/backend/providers/llm";
+import { completeReceipt } from "@aihot/backend/providers/receipts";
+import { collapseWhitespace } from "@aihot/backend/lib/text";
+import { modelFor } from "@aihot/backend/editorial/models";
+import { loadAnalyzeInput, type AnalyzeInputArticle } from "@aihot/backend/editorial/input";
+import { clampText, parseTranslateOutput } from "@aihot/backend/editorial/writing";
+import { PROMPT_VERSION, prompt } from "./prompt.ts";
 
-const SHOWCASE_PROMPT_VERSION = promptVersion("summarize-github-project");
+const SHOWCASE_PROMPT_VERSION = PROMPT_VERSION;
 /** README characters given to the writer; collect.ts truncates the stored body to the same bound. */
 const SHOWCASE_BODY_CHARS = 6000;
 
@@ -78,7 +78,7 @@ async function writeShowcase(a: AnalyzeInputArticle, opts: { attemptTag?: string
     subject: subjectOf(a),
     promptVersion: SHOWCASE_PROMPT_VERSION,
     system: "",
-    user: promptText("summarize-github-project", {
+    user: prompt({
       repoName: a.title,
       title: a.title,
       body: clampText(a.bodyText || a.excerpt || "", SHOWCASE_BODY_CHARS),

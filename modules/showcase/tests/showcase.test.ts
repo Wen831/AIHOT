@@ -3,17 +3,20 @@
 // is truncated before storage, the publication rules let a written showcase item into /all with a
 // detail page, and the collection measures the repo's GitHub state (a failure of that leaves the
 // item and its stored stats untouched).
-import { tag } from "./setup.ts";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { after, before, test } from "node:test";
 import { config } from "@aihot/backend/config";
 import { closeDb, sql } from "@aihot/backend/db";
 import { stopBoss } from "@aihot/backend/jobs/queue";
+import { installModules } from "@aihot/backend/modules";
 import { collectSource } from "@aihot/backend/sources/collect";
-import { repoOwnerRepo } from "@aihot/backend/sources/github";
 import { hasItemPage, isPoolEligible } from "@aihot/backend/publication/rules";
+import { repoOwnerRepo } from "../github.ts";
+import { showcaseServer } from "../server.ts";
 
+/** A short unique tag for the rows a test creates. */
+const tag = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
 const T = tag();
 const README = "A rendered README with plenty of material to read about the project and its usage. ".repeat(200);
 let feedItems: string[] = [];
@@ -43,6 +46,8 @@ const stats = async (title: string) =>
   (await sql<{ showcase_stats: Record<string, any> | null }[]>`SELECT showcase_stats FROM articles WHERE source_id = ${SOURCE_ID} AND title LIKE ${`${title}%`}`)[0]!.showcase_stats;
 
 before(async () => {
+  // The collection and analysis path reaches the module through its socket, as the worker's would.
+  installModules([showcaseServer]);
   feedItems = Array.from({ length: 14 }, (_, i) => item(i));
   await sql`INSERT INTO sources (id, name, kind, config, tier, participation_mode, next_fetch_at)
             VALUES (${SOURCE_ID}, 'GitHub Trending', 'rss', ${sql.json({ feedUrl: `${base}/feed.xml`, summaryIsBody: true, _aihot: { maxItemsPerRound: 10 } })}, 'EXCLUDE_MP', 'showcase', '2100-01-01')`;

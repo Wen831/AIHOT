@@ -9,7 +9,7 @@ import { queueProcessing } from "../jobs/content.ts";
 import { BudgetExceededError, completeReceipt } from "../providers/receipts.ts";
 import { fetchRss } from "./rss.ts";
 import { fetchDetail, fetchWebList, isCallToActionTitle, needsTitle, type DetailNeed } from "./web-list.ts";
-import { fetchRepoStats, repoOwnerRepo } from "./github.ts";
+import { participationMode } from "../modules.ts";
 import { unsupportedConfig } from "./config-keys.ts";
 import { admitListing } from "./filters.ts";
 import { fetchJsonList } from "./json-list.ts";
@@ -51,13 +51,6 @@ async function storedDetails(identities: string[]): Promise<Map<string, StoredDe
 }
 
 const DAY_MS = 86_400_000;
-/** Showcase ranking/reading: CJK share over this counts an item as a Chinese project; README characters the writer sees. */
-const SHOWCASE_BODY_CHARS = 6000;
-const chineseShare = (text: string): number => {
-  const chars = text.replace(/\s/g, "");
-  if (!chars.length) return 0;
-  return (chars.match(/[\u4e00-\u9fff]/g)?.length ?? 0) / chars.length;
-};
 
 type CollectionCandidate = Candidate & { detailRules?: string };
 
@@ -200,26 +193,13 @@ export async function collectSource(sourceId: string, opts: { force?: boolean } 
       const cutoff = Date.now() - maxAgeDays * 86400000;
       candidates = candidates.filter((c) => !c.publishedAt || !Number.isFinite(c.publishedAt.getTime()) || c.publishedAt.getTime() >= cutoff);
     }
-    // Showcase sources (a display-only feed such as the daily GitHub trending): the feed order is the
-    // ranking, a repo stored earlier yields its slot to a new one, Chinese projects get a small bonus,
-    // and only the top entries reach storage. The rendered README bodies are truncated here, before
-    // storage: full ones would sit in the pool unread and burn writing tokens.
-    if (source.participation_mode === "showcase") {
-      const cap = Number(source.config._aihot?.maxItemsPerRound ?? 10);
-      const keys = candidates.map((c) => c.identityKey!).filter(Boolean);
-      // The whole feed (not just what this round will store) is what stats track: a listed repo
-      // already stored still gets its fresh reading.
-      showcaseFeedKeys = [...new Set(keys)];
-      const storedKeys = keys.length
-        ? new Set((await sql<{ identity_key: string }[]>`SELECT identity_key FROM articles WHERE source_id = ${sourceId} AND identity_key = ANY(${keys}::text[])`).map((r) => r.identity_key))
-        : new Set<string>();
-      candidates = candidates
-        .filter((c) => !storedKeys.has(c.identityKey!))
-        .map((c, index) => ({ c, score: -index + (chineseShare(`${c.title}\n${c.excerpt ?? ""}\n${c.bodyText ?? ""}`) > 0.3 ? 2 : 0) }))
-        .sort((x, y) => y.score - x.score)
-        .map(({ c }) => c)
-        .slice(0, cap)
-        .map((c) => ({ ...c, bodyHtml: null, bodyText: c.bodyText?.slice(0, SHOWCASE_BODY_CHARS) ?? c.bodyText, excerpt: c.excerpt?.slice(0, SHOWCASE_BODY_CHARS) ?? c.excerpt }));
+    // A module-owned participation mode shapes its own listing (ranking, capping, truncation) and
+    // may report the whole feed's identity keys, to track state over it after the round.
+    const mode = participationMode(source.participation_mode);
+    if (mode?.shapeListing) {
+      const shaped = await mode.shapeListing({ candidates, source: { id: sourceId, config: source.config } });
+      candidates = shaped.candidates;
+      showcaseFeedKeys = shaped.feedKeys ?? [];
     }
     // Process all candidates already returned before advancing the success cursor.
 
@@ -281,9 +261,9 @@ export async function collectSource(sourceId: string, opts: { force?: boolean } 
 
     ({ created, revised } = await store(sourceId, candidates, firstImport ? "first-import" : null));
 
-    // Showcase stats: the feed carries no stars. Measure everything today's feed still lists — new
-    // items get their baseline, listed old ones a fresh reading; GitHub out of reach leaves them as they are.
-    if (source.participation_mode === "showcase") await refreshShowcaseStats(sourceId, showcaseFeedKeys);
+    // A module-owned mode's follow-up over the listing it reported (the showcase module measures
+    // its items' GitHub state); a mode that shaped nothing reports no keys and skips this.
+    await mode?.afterListing?.({ sourceId, feedKeys: showcaseFeedKeys });
 
     if (firstImport) nextCursor.initializedAt = new Date().toISOString();
     nextCursor.lastOkAt = new Date().toISOString();
@@ -302,47 +282,6 @@ export async function collectSource(sourceId: string, opts: { force?: boolean } 
 
 /** X ids begin with their millisecond timestamp (since 2010-11-04): the smallest id of a post made at `ms`. */
 const xIdAt = (ms: number) => (BigInt(Math.max(0, ms - 1288834974657)) << 22n);
-
-/** Hours a stored measurement stays fresh: re-collections and retries within it do not re-buy API calls. */
-const SHOWCASE_MEASURE_MIN_HOURS = 12;
-/** How long an item stays measured with its feed appearances; after that its growth line freezes. */
-const SHOWCASE_TRACK_DAYS = 7;
-
-/**
- * Measures every item of today's round still within the tracking window: a new item gets its
- * baseline (starsFirst), a measured one keeps it and updates the current value — their difference
- * is the daily growth the item page shows. GitHub out of reach leaves the stored stats untouched,
- * and the UI hides or dates them.
- */
-async function refreshShowcaseStats(sourceId: string, identityKeys: string[]): Promise<void> {
-  const keys = [...new Set(identityKeys.filter(Boolean))];
-  if (!keys.length) return;
-  const rows = await sql<{ id: string; url: string; showcase_stats: Record<string, any> | null }[]>`
-    SELECT id, url, showcase_stats FROM articles
-    WHERE source_id = ${sourceId} AND identity_key = ANY(${keys}::text[])
-      AND discovered_at > now() - ${`${SHOWCASE_TRACK_DAYS} days`}::interval`;
-  const repos = rows
-    .map((row) => ({ row, repo: repoOwnerRepo(row.url) }))
-    .filter((entry): entry is { row: typeof rows[number]; repo: string } => {
-      if (!entry.repo) return false;
-      const at = entry.row.showcase_stats?.measuredAt;
-      return !at || Number.isNaN(Date.parse(String(at))) || Date.now() - Date.parse(String(at)) > SHOWCASE_MEASURE_MIN_HOURS * 3600_000;
-    });
-  const measured = await Promise.allSettled(repos.map(({ repo }) => fetchRepoStats(repo)));
-  for (let i = 0; i < repos.length; i += 1) {
-    const got = measured[i];
-    if (got?.status !== "fulfilled" || !got.value) continue;
-    const old = repos[i]!.row.showcase_stats;
-    await sql`UPDATE articles SET showcase_stats = ${sql.json({
-      stars: got.value.stars,
-      starsFirst: typeof old?.starsFirst === "number" ? old.starsFirst : got.value.stars,
-      firstAt: typeof old?.firstAt === "string" ? old.firstAt : new Date().toISOString(),
-      forks: got.value.forks,
-      language: got.value.language,
-      measuredAt: new Date().toISOString(),
-    } as never)} WHERE id = ${repos[i]!.row.id}`;
-  }
-}
 
 /**
  * Where an account's posts are known to be read up to. A quiet account's newest post can be months

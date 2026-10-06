@@ -8,7 +8,7 @@ import type { PgBoss } from "pg-boss";
 import { sql, type Db } from "../db.ts";
 import { extractArticleBody, pageFetchable } from "../content/extract.ts";
 import { analyzeArticle, AnalysisInterruptedError } from "../editorial/analyze.ts";
-import { analyzeShowcaseArticle } from "../editorial/showcase.ts";
+import { participationMode } from "../modules.ts";
 import { isHistorical } from "../content/materials.ts";
 import { publishArticle } from "../publication/publish.ts";
 import { BudgetExceededError, ProviderRejectedError, ReceiptBusyError, ReceiptUnknownError } from "../providers/receipts.ts";
@@ -46,11 +46,13 @@ async function route(articleId: string, db: Db): Promise<Route | null> {
     FROM articles a JOIN sources s ON s.id = a.source_id WHERE a.id = ${articleId}`;
   if (!row) return null;
   const historical = isHistorical(row);
-  const signal = row.participation_mode !== "editorial" && row.participation_mode !== "showcase";
+  // A module-owned mode behaves like editorial in routing (it is written, not signal evidence), and
+  // its body is the feed's own: the pages behind its items are never fetched for more.
+  const moduleMode = participationMode(row.participation_mode);
+  const signal = row.participation_mode !== "editorial" && !moduleMode;
   const pending = row.body_status === "pending";
   const wantsBody = row.config.fetchPublicContent === true || !!row.config.detail || row.kind === "web_list";
-  // A showcase item's body is the feed's own; its GitHub pages are never fetched for more.
-  const needsPage = row.participation_mode !== "showcase" && !signal && pageFetchable(row.url, row.kind) && (wantsBody || row.bare);
+  const needsPage = !moduleMode && !signal && pageFetchable(row.url, row.kind) && (wantsBody || row.bare);
   const needsXArticle = row.kind === "x_search" && (!signal || (row.participation_mode === "hot_signal" && !historical));
   return { step: pending && (needsPage || needsXArticle) ? "extract" : "analyze", signal, historical };
 }
@@ -123,15 +125,16 @@ export async function processArticle(articleId: string, opts: { attemptTag?: str
 }
 
 async function processRevision(articleId: string, row: NonNullable<Awaited<ReturnType<typeof processingInput>>>, opts: { attemptTag?: string }): Promise<{ state: string }> {
-  if (row.participation_mode === "showcase") {
-    // The showcase item is written, not judged; it is published but never grouped.
-    const result = await analyzeShowcaseArticle(articleId, opts);
+  const analyzer = participationMode(row.participation_mode)?.analyze;
+  if (analyzer) {
+    // A module-owned mode's item is written, not judged; it is published but never grouped.
+    const result = await analyzer(articleId, opts);
     if (!result) return { state: "missing" };
     if (result.stale) return { state: "stale" };
     await publishArticle(articleId);
     await sql`UPDATE articles SET processing_attempts = 0, processing_retry_at = NULL, processing_queued_at = NULL
               WHERE id = ${articleId} AND revision = ${row.revision}`;
-    return { state: result.output?.relevance ?? "unknown" };
+    return { state: result.relevance };
   }
   if (row.participation_mode !== "editorial") {
     // Normally queued straight for grouping (queueProcessing); an explicit re-evaluation lands here.

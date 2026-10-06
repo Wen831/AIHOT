@@ -41,7 +41,7 @@ export interface ItemRow {
   zh_text: string | null;
   /** Chinese translation of the post an X post quotes. */
   quoted_zh: string | null;
-  /** Measured GitHub repo state of a showcase item (sources/github.ts), as stored. */
+  /** Measured GitHub repo state of a showcase item (the showcase module's stats), as stored. */
   showcase_stats: Record<string, any> | null;
 }
 

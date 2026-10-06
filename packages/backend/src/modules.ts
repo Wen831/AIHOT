@@ -10,6 +10,30 @@ import type { Db } from "./db.ts";
 import type { QueueOptions } from "./jobs/queue.ts";
 import type { Finding } from "./notify/feishu.ts";
 import type { Topic, TopicMember } from "./publication/topics.ts";
+import type { Candidate } from "./sources/types.ts";
+
+/**
+ * A participation mode a module owns (a display-only channel such as a daily trending feed): its
+ * sources' items are not judged the editorial way — the module shapes the listing, writes the copy
+ * and tracks its own state (sources/collect.ts, jobs/content.ts). A mode the engine knows nothing
+ * about must still clear the checks that assume editorial or signal: those call participationMode().
+ */
+export interface ParticipationMode {
+  /**
+   * Shapes a listing before storage (sources/collect.ts): ranking, capping and truncation are the
+   * mode's. May report the whole feed's identity keys when the mode tracks state over the full
+   * listing, not only what this round stores.
+   */
+  shapeListing?: (ask: { candidates: readonly Candidate[]; source: { id: string; config: Record<string, unknown> } }) => Promise<{ candidates: Candidate[]; feedKeys?: string[] }>;
+  /** After a successful listing collection, with the keys shapeListing reported (measurement, bookkeeping). */
+  afterListing?: (ask: { sourceId: string; feedKeys: string[] }) => Promise<void>;
+  /**
+   * Writes the item's copy and commits it the way analyzeArticle would (jobs/content.ts): returns
+   * `stale` when the input moved under it, and the relevance state ("pass", "unknown", …) the
+   * article lands in; the engine publishes and clears the retries. Null when there is nothing to do.
+   */
+  analyze?: (articleId: string, opts: { attemptTag?: string }) => Promise<{ stale: boolean; relevance: string } | null>;
+}
 
 /** A cron schedule (Asia/Shanghai), recorded in job_runs like the engine's (apps/worker/src/schedules.ts). */
 export interface Scheduled {
@@ -260,6 +284,8 @@ export interface ServerModule {
     resumed?: (sourceId: string, tx: Db) => Promise<void>;
     fetchNow?: (source: { id: string; config: Record<string, unknown> }) => Promise<Record<string, unknown>>;
   }>;
+  /** Participation modes the module owns, by mode name (sources/participation.ts for the modes themselves). */
+  participationModes?: Record<string, ParticipationMode>;
   /** Lines of the Monday source-health report (operations/reports.ts), after the source counts. */
   sourceHealth?: (now: number) => Promise<string[]>;
   /** Job queues of its own (jobs/queue.ts). */
@@ -294,6 +320,13 @@ export function serverModules(): readonly ServerModule[] {
 /** The first installed module's responder, if any. */
 export function responder(): Responder | null {
   return installed.find((m) => m.responder)?.responder ?? null;
+}
+
+/** The first installed module's socket for a participation mode, if any (engine checks that assume
+ *  editorial or signal call this: a mode the engine does not know must still clear them). */
+export function participationMode(mode: string | null | undefined): ParticipationMode | null {
+  if (!mode) return null;
+  return installed.find((m) => m.participationModes?.[mode])?.participationModes?.[mode] ?? null;
 }
 
 /** The first installed module's reminder for the person behind this request, at this exit. */
