@@ -12,6 +12,8 @@ const WHITELIST_FILE = "whitelist.txt";
 
 const wordsOf = (file: string): string[] =>
   readFileSync(file, "utf8")
+    // A BOM would glue itself to the first word and quietly kill its match.
+    .replace(/^\uFEFF/, "")
     .split(/\r?\n/)
     .map((line) => line.trim().toLowerCase())
     .filter((line) => line && !line.startsWith("#"));
@@ -33,6 +35,7 @@ export function buildGuard(dir: string = LEXICON_DIR): LexiconGuard {
     console.warn(`lexicon-guard: no words under ${dir}; the guard is installed but inactive`);
     return { screen: () => null };
   }
+  console.log(`lexicon-guard: ${words.size} words from ${lists.length} lists (${whitelist.size} exempt)`);
   const mint = new Mint([...words]);
   return {
     screen: ({ title, summary, body }) => {
