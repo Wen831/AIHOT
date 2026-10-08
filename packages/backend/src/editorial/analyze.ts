@@ -419,7 +419,17 @@ export async function runAnalysis(a: AnalyzeInputArticle, opts: StepOpts = {}): 
       return { prefilter: { label: "BLOCK", reason, model: "local-guard", receiptId: 0, reused: true }, scores: null, writing: null, structure: null };
     }
   }
-  const prefilter = await runSelectionPrefilter(a, opts);
+  let prefilter: AnalysisRun["prefilter"];
+  try {
+    prefilter = await runSelectionPrefilter(a, opts);
+  } catch (error) {
+    // The provider's content filter refusing the prefilter itself — on its input or, for a summary
+    // the model writes, its output — blocks the item like a BLOCK verdict would, not a failure.
+    if (isContentFilter(error)) {
+      return { prefilter: { label: "BLOCK", reason: "provider content filter", model: "content-filter", receiptId: 0, reused: true }, scores: null, writing: null, structure: null };
+    }
+    throw error;
+  }
   // UNKNOWN is let through (its material is as complete as it will get); BLOCK stops here.
   if (prefilter.label === "BLOCK") return { prefilter, scores: null, writing: null, structure: null };
   // The structure step needs nothing from the scores: it runs beside them.

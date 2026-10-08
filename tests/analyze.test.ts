@@ -19,7 +19,7 @@ const X_SOURCE = `test-analyze-x-${T}`;
 
 interface Req { step: AnalysisStep; marker: string; user: string }
 const requests: Req[] = [];
-const MARKERS = ["CLEAR", "RESCUE", "LOW", "OFFTOPIC", "BARE", "VAGUE", "THIN", "SENSITIVE", "推文"];
+const MARKERS = ["CLEAR", "RESCUE", "LOW", "OFFTOPIC", "BARE", "VAGUE", "THIN", "SENSITIVE", "TOXIC", "推文"];
 // The scores sit a few points around the pack's T1 threshold and understand floor, so each case means
 // the same after a site recalibrates them: selected when the two add up to 2 × T1, written like a
 // selected item when they add up to more than 2 × FLOOR, translated otherwise.
@@ -39,7 +39,11 @@ const provider = await stub((_hit, req) => {
   const marker = MARKERS.find((m) => user.includes(m)) ?? "";
   requests.push({ step, marker, user });
   const answer = (content: unknown) => ({ id: `stub-${requests.length}`, model: "stub", choices: [{ message: { content: typeof content === "string" ? content : JSON.stringify(content) } }], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } });
-  if (step === "prefilter") return answer({ label: marker === "OFFTOPIC" || marker === "BARE" ? "BLOCK" : marker === "VAGUE" ? "UNKNOWN" : "PASS", reason: "测试" });
+  if (step === "prefilter") {
+    // The provider's content filter refusing the prefilter itself (here on its output side).
+    if (marker === "TOXIC") return new Reply(422, { type: "error", error: { type: "unprocessable_entity_error", message: "output new_sensitive (1027)", http_code: "422" } });
+    return answer({ label: marker === "OFFTOPIC" || marker === "BARE" ? "BLOCK" : marker === "VAGUE" ? "UNKNOWN" : "PASS", reason: "测试" });
+  }
   if (step === "score") return answer({ attentionScore: scoreAnswers[marker]!.shift() });
   if (step === "understand") {
     if (marker === "SENSITIVE") return new Reply(400, { contentFilter: [{ level: 1, role: "user" }], error: { code: "1301", message: "系统检测到输入或生成内容可能包含不安全或敏感内容" } });
@@ -89,6 +93,15 @@ test("a selected item: prefilter, two scores, the content understanding and the 
   assert.equal(r.output.fact.evidence, "a club signed a player");
   const score = requests.find((q) => q.marker === "CLEAR" && q.step === "score")!;
   assert.match(score.user, /【标题】\nCLEAR model release/, "the score reads the original title, before any writing");
+});
+
+test("a prefilter the provider's content filter refuses blocks the item, never a failed retry", async () => {
+  const id = await article("TOXIC");
+  const res = await analyzeArticle(id);
+  assert.equal(res!.output!.relevance, "block");
+  assert.deepEqual(calls("TOXIC"), ["prefilter"], "no score, writing or structure call follows");
+  const r = await row(id);
+  assert.deepEqual([r.relevance, r.output.prefilter.reason], ["block", "provider content filter"]);
 });
 
 test("structure retains grounded conditions, rejects invented or unseen quotes, and does not infer missing scope", async () => {
