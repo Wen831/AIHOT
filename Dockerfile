@@ -20,6 +20,7 @@ COPY packages/contracts/package.json packages/contracts/
 COPY industry/package.json industry/
 COPY site/package.json site/
 COPY modules/showcase/package.json modules/showcase/
+COPY modules/lexicon-guard/package.json modules/lexicon-guard/
 RUN npm ci --no-audit --no-fund ${NPM_REGISTRY:+--registry=$NPM_REGISTRY}
 COPY . .
 RUN npm run build -w @aihot/web && if [ "$NPM_KEEP_DEV" != "true" ]; then npm prune --omit=dev --no-audit --no-fund; fi

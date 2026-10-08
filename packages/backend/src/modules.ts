@@ -35,6 +35,19 @@ export interface ParticipationMode {
   analyze?: (articleId: string, opts: { attemptTag?: string }) => Promise<{ stale: boolean; relevance: string } | null>;
 }
 
+/**
+ * A module's local guard over the material before any analysis step runs (editorial/analyze.ts): what
+ * it blocks never reaches a model, so a provider's content filter cannot fail the item into "failed"
+ * retries — it lands in the prefilter's BLOCK path instead ("blocked", visible and requeueable).
+ */
+export interface LocalGuard {
+  /**
+   * Returns the blocking reason the analysis record stores (never the words it hit — those stay out of
+   * the database and its public surfaces), or null to let the material go on to the model steps.
+   */
+  screen: (input: { title: string; summary: string; body: string }) => string | null;
+}
+
 /** A cron schedule (Asia/Shanghai), recorded in job_runs like the engine's (apps/worker/src/schedules.ts). */
 export interface Scheduled {
   name: string;
@@ -286,6 +299,8 @@ export interface ServerModule {
   }>;
   /** Participation modes the module owns, by mode name (sources/participation.ts for the modes themselves). */
   participationModes?: Record<string, ParticipationMode>;
+  /** The first installed module's local guard over the material before the analysis steps. */
+  localGuard?: LocalGuard;
   /** Lines of the Monday source-health report (operations/reports.ts), after the source counts. */
   sourceHealth?: (now: number) => Promise<string[]>;
   /** Job queues of its own (jobs/queue.ts). */
@@ -327,6 +342,11 @@ export function responder(): Responder | null {
 export function participationMode(mode: string | null | undefined): ParticipationMode | null {
   if (!mode) return null;
   return installed.find((m) => m.participationModes?.[mode])?.participationModes?.[mode] ?? null;
+}
+
+/** The first installed module's local guard, if any (editorial/analyze.ts screens material with it). */
+export function localGuard(): LocalGuard | null {
+  return installed.find((m) => m.localGuard)?.localGuard ?? null;
 }
 
 /** The first installed module's reminder for the person behind this request, at this exit. */

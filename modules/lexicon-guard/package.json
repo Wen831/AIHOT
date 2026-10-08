@@ -1,0 +1,14 @@
+{
+  "name": "@aihot/lexicon-guard",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./module.ts",
+    "./server": "./server.ts"
+  },
+  "dependencies": {
+    "@aihot/backend": "*",
+    "@aihot/contracts": "*",
+    "mint-filter": "^4.0.3"
+  }
+}

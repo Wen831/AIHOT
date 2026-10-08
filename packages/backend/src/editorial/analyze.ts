@@ -27,6 +27,7 @@ import {
 import { CATEGORY_GUIDE, CATEGORY_TAGS, ENTITIES, ENTITY_TAGS, ITEM_TYPES, normalizeTags, TOPIC_TAGS } from "./vocabulary.ts";
 import { promptText, promptVersion } from "./prompts.ts";
 import { originalPostCopy } from "../content/posts.ts";
+import { localGuard } from "../modules.ts";
 
 export { buildMaterial, loadAnalyzeInput, type AnalyzeInputArticle };
 
@@ -210,7 +211,8 @@ export interface AnalysisRun {
   structure: (ReturnType<typeof normalizeStructure> & { model: string; receiptId: number; reused: boolean }) | null;
 }
 
-const isContentFilter = (error: unknown) => error instanceof ProviderRejectedError && !error.retryable && /contentFilter|"1301"/.test(error.message);
+const isContentFilter = (error: unknown) =>
+  error instanceof ProviderRejectedError && !error.retryable && /contentFilter|"1301"|new_sensitive/.test(error.message);
 
 /** Only a title or a feed summary, and a page to fetch: the article is judged on the page. */
 export function waitsForPage(a: AnalyzeInputArticle): boolean {
@@ -408,6 +410,15 @@ async function runSummarize(a: AnalyzeInputArticle, opts: StepOpts): Promise<Non
 /** Runs the steps on the material as it is (or reuses their receipts) without writing business results. */
 export async function runAnalysis(a: AnalyzeInputArticle, opts: StepOpts = {}): Promise<AnalysisRun> {
   checkAnalysisRunning();
+  // A module's local guard sees the material first: what it blocks never reaches a model, so a
+  // provider's content filter cannot turn it into "failed" retries (receiptId 0: no paid request).
+  const guard = localGuard();
+  if (guard) {
+    const reason = guard.screen({ title: a.title ?? "", summary: a.excerpt ?? "", body: a.bodyText ?? "" });
+    if (reason !== null) {
+      return { prefilter: { label: "BLOCK", reason, model: "local-guard", receiptId: 0, reused: true }, scores: null, writing: null, structure: null };
+    }
+  }
   const prefilter = await runSelectionPrefilter(a, opts);
   // UNKNOWN is let through (its material is as complete as it will get); BLOCK stops here.
   if (prefilter.label === "BLOCK") return { prefilter, scores: null, writing: null, structure: null };
@@ -492,7 +503,9 @@ export async function analyzeArticle(articleId: string, opts: StepOpts = {}): Pr
   const run = await runAnalysis(input, opts);
   const out = normalizeAnalysis(run);
   const receiptIds = [
-    run.prefilter.receiptId, ...(run.scores?.receiptIds ?? []), ...(run.writing?.receiptIds ?? []), ...(run.structure ? [run.structure.receiptId] : []),
+    // 0 is the local guard's verdict (no paid request, so nothing to settle).
+    ...(run.prefilter.receiptId ? [run.prefilter.receiptId] : []),
+    ...(run.scores?.receiptIds ?? []), ...(run.writing?.receiptIds ?? []), ...(run.structure ? [run.structure.receiptId] : []),
   ];
   const w = run.writing;
   const detail = {
