@@ -38,7 +38,10 @@ export async function correctReportClassification(tx: Tx, articleId: string, rea
       target[entriesKey]!.push(...moving);
       if (!daily) { from.summary = null; target.summary = null; }
     }
-    const arranged = groups.filter(g => g[entriesKey]?.length).sort((a, b) => SECTION_ORDER.indexOf(a[labelKey]!) - SECTION_ORDER.indexOf(b[labelKey]!));
+    // A section outside the taxonomy's order (the industry's result section, an older hand-written
+    // heading) keeps its place at the end instead of jumping to the front.
+    const order = (label: string | undefined) => { const i = SECTION_ORDER.indexOf(label ?? ""); return i < 0 ? SECTION_ORDER.length : i; };
+    const arranged = groups.filter(g => g[entriesKey]?.length).sort((a, b) => order(a[labelKey]!) - order(b[labelKey]!));
     if (daily) {
       content.sections = arranged;
       // The release figure (dailyMetrics) follows the new classification; without a RELEASE kind there is none.

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Form, Link, useNavigation, useSearchParams } from "react-router";
 import { CATEGORY_KEYS, CATEGORY_LABELS, CHANNEL_LABELS, isFootballCategory, type CategoryKey, type ChannelKey } from "@aihot/contracts/taxonomy";
+import { RESULT_SECTION } from "@aihot/industry/taxonomy";
 import { SITE } from "@aihot/site";
 import { IconCheck, IconClose, IconFilter, IconSearch } from "../../components/icons";
 import { PillTabs } from "../../components/ui/Tabs";
@@ -25,42 +26,52 @@ function hrefWith(base: string, params: URLSearchParams, patch: Record<string, s
 }
 
 /**
- * The feed's one filter (精选 and 全部动态 alike): none, 一手, or a category. One choice at a time: picking
- * 一手 clears the category and picking a category clears 一手. Older 资讯 / X links still filter; the
- * choice then shows as none.
+ * The feed's one filter (精选 and 全部动态 alike): none, 一手, a category, or the industry's preset
+ * (its result section: category and tag together). One choice at a time: picking anything clears the
+ * others, so a preset never mixes with another category. Older 资讯 / X links still filter; the choice
+ * then shows as none.
  */
 function filterOptions(base: string, params: URLSearchParams, noneLabel: string) {
   return [
-    { key: "all", label: noneLabel, to: hrefWith(base, params, { category: null, channel: null }) },
-    { key: "firstParty", label: CHANNEL_LABELS.firstParty, to: hrefWith(base, params, { category: null, channel: "firstParty" }) },
-    ...CATEGORY_KEYS.map((k) => ({
-      key: k,
-      // 足球类带球标，与前面的国内类一眼分开。
-      label: <>{isFootballCategory(k) && <span aria-hidden="true" className="mr-0.5 inline-block text-[0.9em]">⚽</span>}{CATEGORY_LABELS[k]}</>,
-      to: hrefWith(base, params, { category: k, channel: null }),
-    })),
+    { key: "all", label: noneLabel, to: hrefWith(base, params, { category: null, channel: null, tag: null }) },
+    { key: "firstParty", label: CHANNEL_LABELS.firstParty, to: hrefWith(base, params, { category: null, channel: "firstParty", tag: null }) },
+    ...CATEGORY_KEYS.flatMap((k) => [
+      {
+        key: k,
+        // 足球类带球标，与前面的国内类一眼分开。
+        label: <>{isFootballCategory(k) && <span aria-hidden="true" className="mr-0.5 inline-block text-[0.9em]">⚽</span>}{CATEGORY_LABELS[k]}</>,
+        to: hrefWith(base, params, { category: k, channel: null, tag: null }),
+      },
+      ...(RESULT_SECTION && k === RESULT_SECTION.category ? [{
+        key: "results",
+        label: <><span aria-hidden="true" className="mr-0.5 inline-block text-[0.9em]">⚽</span>{RESULT_SECTION.label}</>,
+        to: hrefWith(base, params, { category: RESULT_SECTION.category, channel: null, tag: RESULT_SECTION.tag }),
+      }] : []),
+    ]),
   ];
 }
 
-function filterKey(category: CategoryKey | null, channel: ChannelKey): string {
-  return channel === "firstParty" ? "firstParty" : (category ?? "all");
+function filterKey(category: CategoryKey | null, channel: ChannelKey, tag: string | null): string {
+  if (channel === "firstParty") return "firstParty";
+  if (category && tag && RESULT_SECTION && category === RESULT_SECTION.category && tag === RESULT_SECTION.tag) return "results";
+  return category ?? "all";
 }
 
 /** Desktop: the filter as a row of tabs beside the search field. */
-export function CategoryTabs({ base, category, channel = "all", layoutId, className = "" }: { base: string; category: CategoryKey | null; channel?: ChannelKey; layoutId: string; className?: string }) {
+export function CategoryTabs({ base, category, channel = "all", tag = null, layoutId, className = "" }: { base: string; category: CategoryKey | null; channel?: ChannelKey; tag?: string | null; layoutId: string; className?: string }) {
   const [params] = useSearchParams();
-  return <PillTabs items={filterOptions(base, params, "全部").map(o => ({ ...o, prefetch: 'intent' as const }))} active={filterKey(category, channel)} layoutId={layoutId} label="筛选" className={className} />;
+  return <PillTabs items={filterOptions(base, params, "全部").map(o => ({ ...o, prefetch: 'intent' as const }))} active={filterKey(category, channel, tag)} layoutId={layoutId} label="筛选" className={className} />;
 }
 
 /**
  * The phone bar of 精选 and 全部: the brand, the 精选 | 全部 switch (a filter in use carries over), and
  * buttons for the filter sheet and search.
  */
-export function FeedBar({ base, category, channel }: { base: "/" | "/all"; category: CategoryKey | null; channel: ChannelKey }) {
+export function FeedBar({ base, category, channel, tag = null }: { base: "/" | "/all"; category: CategoryKey | null; channel: ChannelKey; tag?: string | null }) {
   const [params] = useSearchParams();
   const [sheet, setSheet] = useState(false);
   const scope = (to: string) => hrefWith(to, params, { q: null, tab: null, search: null });
-  const filtered = filterKey(category, channel) !== "all";
+  const filtered = filterKey(category, channel, tag) !== "all";
   return (
     <>
       <PhoneBar
@@ -91,7 +102,7 @@ export function FeedBar({ base, category, channel }: { base: "/" | "/all"; categ
           </>
         }
       />
-      <FilterSheet open={sheet} onClose={() => setSheet(false)} base={base} active={filterKey(category, channel)} />
+      <FilterSheet open={sheet} onClose={() => setSheet(false)} base={base} active={filterKey(category, channel, tag)} />
     </>
   );
 }
@@ -126,18 +137,26 @@ function FilterSheet({ open, onClose, base, active }: { open: boolean; onClose: 
 /** Phones: the filter and tag in use as chips under the bar; each one clears itself when tapped. */
 export function ActiveFilters({ base, category, channel, tag }: { base: string; category: CategoryKey | null; channel: ChannelKey; tag: string | null }) {
   const [params] = useSearchParams();
+  const preset = !!RESULT_SECTION && category === RESULT_SECTION.category && tag === RESULT_SECTION.tag;
   const label = channel === "firstParty" ? CHANNEL_LABELS.firstParty : category ? CATEGORY_LABELS[category] : null;
   if (!label && !tag) return null;
   const chip = "inline-flex min-h-11 max-w-full items-center gap-1 rounded-full bg-accent-soft pl-3 pr-2 text-[13px] font-medium text-accent transition-opacity active:opacity-60";
   return (
     <div className="flex flex-wrap gap-2 pb-3 pt-1 lg:hidden">
-      {label && (
-        <Link to={hrefWith(base, params, { category: null, channel: null })} aria-label={`取消筛选：${label}`} className={chip}>
-          只看{label}
+      {preset && RESULT_SECTION ? (
+        <Link to={hrefWith(base, params, { category: null, channel: null, tag: null })} aria-label={`取消筛选：${RESULT_SECTION.label}`} className={chip}>
+          只看{RESULT_SECTION.label}
           <IconClose size={14} strokeWidth={2} />
         </Link>
+      ) : (
+        label && (
+          <Link to={hrefWith(base, params, { category: null, channel: null })} aria-label={`取消筛选：${label}`} className={chip}>
+            只看{label}
+            <IconClose size={14} strokeWidth={2} />
+          </Link>
+        )
       )}
-      {tag && (
+      {!preset && tag && (
         <Link to={hrefWith(base, params, { tag: null })} aria-label={`取消标签：${tag}`} className={chip}>
           <span className="truncate">#{tag}</span>
           <IconClose size={14} strokeWidth={2} className="shrink-0" />

@@ -29,6 +29,15 @@ export const CATEGORIES = [
  */
 export const RELEASE: { category: string; tag: string; unit: string } | null = null;
 
+/**
+ * 日报的「赛果」版面（可选）：当天这个类别里、打了这个标签、评分达线但没进精选的条目，
+ * 按评分降序单独成节放在日报各节之后（不占主条目名额、不进周报月报候选；近 7 天日报引用过的不重复）。
+ * 没有这类版面需求的行业设成 null。
+ */
+export const RESULT_SECTION: { label: string; category: string; tag: string; minScore: number; maxItems: number } | null = {
+  label: "赛果", category: "match", tag: "比赛赛果", minScore: 50, maxItems: 12,
+};
+
 /** 周报月报的总述可以直接写、不必在报道里找到出处的行业通用词（小写，只对拉丁字母缩写生效）。站名会自动算进去。 */
 export const PLAIN_TERMS: readonly string[] = ["gdp", "cpi", "ai", "var", "ffp", "uefa", "fifa"];
 

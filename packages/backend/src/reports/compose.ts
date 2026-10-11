@@ -5,7 +5,7 @@
 // (industry/prompts/report-period*.md).
 import { z } from "zod";
 import { EDITION_TIMES, REPORTS, SITE } from "@aihot/site";
-import { PLAIN_TERMS, RELEASE } from "@aihot/industry/taxonomy";
+import { PLAIN_TERMS, RELEASE, RESULT_SECTION } from "@aihot/industry/taxonomy";
 import { promptText, promptVersion } from "../editorial/prompts.ts";
 import { modelFor } from "../editorial/models.ts";
 import { ENTITIES, isRelease } from "../editorial/vocabulary.ts";
@@ -16,7 +16,7 @@ import { chatJson } from "../providers/llm.ts";
 import { completeReceipt } from "../providers/receipts.ts";
 import { shutdownSignal } from "../jobs/queue.ts";
 import { emit } from "../modules.ts";
-import { arrangeDaily, candidates, dailyEdition, periodEntries, sectionOf, SECTION_ORDER, type Candidate, type EditionEntry } from "./edition.ts";
+import { arrangeDaily, candidates, dailyEdition, dailyMemory, periodEntries, reportEntry, resultReports, sectionOf, SECTION_ORDER, type Candidate, type DailyEntry, type EditionEntry } from "./edition.ts";
 
 export const REPORT_VERSION = promptVersion("report-period", "report-period-sections", "report-period-no-sections");
 
@@ -81,6 +81,28 @@ function windowPoint(at: Date): string {
 }
 
 /**
+ * The industry's result section for a daily (RESULT_SECTION), or null when the industry has none or
+ * nothing qualifies: the window's unselected tagged results, best first, minus what the issue already
+ * carries (by report or by fact) and what recent issues cited. Built after the arrangement so its
+ * items never compete for the main entries, and stored as its own section so they stay out of the
+ * weekly/monthly candidates.
+ */
+async function resultSection(date: string, start: Date, end: Date, issue: { main: EditionEntry[]; flashes: EditionEntry[] }): Promise<{ label: string; items: DailyEntry[] } | null> {
+  const cfg = RESULT_SECTION;
+  if (!cfg) return null;
+  const [memory, rows] = await Promise.all([dailyMemory(date), resultReports(start, end, cfg.category, cfg.tag, cfg.minScore)]);
+  const carriedIds = new Set([...issue.main, ...issue.flashes].map((e) => e.entry.itemId));
+  const carriedFacts = new Set([...issue.main, ...issue.flashes].flatMap((e) => (e.entry.factId ? [e.entry.factId] : [])));
+  const items = rows
+    .filter((r) => !carriedIds.has(r.id)
+      && !(r.fact_public_id && (carriedFacts.has(r.fact_public_id) || memory.keys.has(r.fact_public_id)))
+      && !memory.keys.has(`a:${r.id}`))
+    .slice(0, cfg.maxItems)
+    .map((r) => ({ ...reportEntry(r), sources: 1 }));
+  return items.length ? { label: cfg.label, items } : null;
+}
+
+/**
  * Daily report for Beijing date D covers the 24 hours up to the site's edition time on D (EDITION_TIMES).
  * Its most important entry leads, in its own words, and the next three are today's highlights. A window
  * the editors judged with nothing new in it still has its issue: no entries, and a lead that says so
@@ -96,6 +118,11 @@ export async function composeDaily(date: string, reason?: string): Promise<{ key
   if (edition.entries.length === 0 && edition.stats.judgedReports === 0) throw new Error(`daily ${date}: nothing judged in its window`);
   const issue = arrangeDaily(edition.entries);
   const [lead, ...rest] = issue.main;
+  const results = await resultSection(date, start, end, issue);
+  const sections = SECTION_ORDER
+    .map((label) => ({ label, items: issue.main.filter((e) => sectionOf(e.category) === label).map((e) => e.entry) }))
+    .filter((s) => s.items.length > 0);
+  if (results) sections.push(results);
   const content = {
     date,
     lead: lead
@@ -103,9 +130,7 @@ export async function composeDaily(date: string, reason?: string): Promise<{ key
       : { title: REPORTS.quiet.title, leadParagraph: REPORTS.quiet.paragraph.replace("{start}", windowPoint(start)).replace("{end}", windowPoint(end)) },
     leadItemId: lead?.entry.itemId ?? null,
     highlights: rest.slice(0, 3).map((e) => e.entry.itemId),
-    sections: SECTION_ORDER
-      .map((label) => ({ label, items: issue.main.filter((e) => sectionOf(e.category) === label).map((e) => e.entry) }))
-      .filter((s) => s.items.length > 0),
+    sections,
     flashes: issue.flashes.map((e) => e.entry),
     metrics: dailyMetrics(issue.main),
     windowStart: start.toISOString(),

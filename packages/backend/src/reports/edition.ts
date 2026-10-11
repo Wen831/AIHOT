@@ -7,7 +7,7 @@
 // independent participants, first-hand), and the first one leads. Sections are the industry pack's
 // (industry/taxonomy.ts CATEGORIES).
 import { addDays } from "@aihot/contracts/time";
-import { CATEGORIES } from "@aihot/industry/taxonomy";
+import { CATEGORIES, RESULT_SECTION } from "@aihot/industry/taxonomy";
 import { sql } from "../db.ts";
 import { currentSignals } from "../events/hot.ts";
 import { pickRepresentative, representativePriority, REPRESENTATIVE_COLUMNS, type RepresentativeIdentity } from "../publication/representative.ts";
@@ -120,6 +120,25 @@ export async function periodReports(start: Date, end: Date): Promise<ReportRow[]
   });
 }
 
+/**
+ * The industry's result section's candidates for a window: the category's tagged reports that scored
+ * past the floor but were never selected. Unselected items have no release time (they are listed as
+ * soon as they exist), so they attribute by timeline_at alone — the visible_after attribution of
+ * periodReports only covers selected, scheduled releases. Their own section keeps them out of the
+ * main entries and the weekly/monthly candidates.
+ */
+export async function resultReports(start: Date, end: Date, category: string, tag: string, minScore: number): Promise<ReportRow[]> {
+  return sql<ReportRow[]>`
+    SELECT ${REPORT_FIELDS}
+    FROM publications p JOIN sources s ON s.id = p.source_id
+    LEFT JOIN facts f ON f.id = p.fact_id AND ${ownFactEvidenceCondition()}
+    LEFT JOIN stories st ON st.id = f.story_id
+    WHERE p.visibility = 'public' AND p.eligible AND NOT p.selected AND NOT p.backfill
+      AND p.category = ${category} AND p.tags @> ${[tag]}::text[] AND p.score >= ${minScore}
+      AND p.timeline_at >= ${start} AND p.timeline_at < ${end}
+    ORDER BY p.score DESC, p.article_id`;
+}
+
 function roleOf(kind: string, official: boolean): string {
   if (official) return kind === "x_search" ? "X·官方" : "官方";
   if (kind === "x_search") return "X·KOL";
@@ -127,7 +146,7 @@ function roleOf(kind: string, official: boolean): string {
   return "媒体";
 }
 
-function reportEntry(r: ReportRow): ReportEntry {
+export function reportEntry(r: ReportRow): ReportEntry {
   return {
     itemId: r.id, factId: r.fact_public_id, storyPublicId: r.story_public_id, title: r.title, summary: r.summary ?? "",
     sourceName: r.source_name, sourceUrl: r.url, sourceId: r.source_id, firstParty: r.first_party,
@@ -167,13 +186,17 @@ export async function candidates(start: Date, end: Date): Promise<Candidate[]> {
 export async function periodEntries(startDate: string, endDate: string): Promise<{ entries: Candidate[]; issues: number }> {
   const issues = await sql<{ key: string; content: Record<string, any> }[]>`
     SELECT key, content FROM reports WHERE kind = 'daily' AND key >= ${startDate} AND key <= ${endDate} ORDER BY key`;
-  const carried = issues.flatMap((issue) => (issue.content.sections ?? []).flatMap((s: any) => (s.items ?? []).filter((it: any) => it.itemId).map((it: any) => ({
-    id: String(it.itemId),
-    key: issue.key,
-    sources: Number(it.sources) || 1,
-    lead: issue.content.leadItemId === it.itemId,
-    highlight: (issue.content.highlights ?? []).includes(it.itemId),
-  }))));
+  const carried = issues.flatMap((issue) => (issue.content.sections ?? []).flatMap((s: any) => {
+    // The industry's result section is a daily-only extra: its items never become weekly/monthly candidates.
+    if (RESULT_SECTION && s.label === RESULT_SECTION.label) return [];
+    return (s.items ?? []).filter((it: any) => it.itemId).map((it: any) => ({
+      id: String(it.itemId),
+      key: issue.key,
+      sources: Number(it.sources) || 1,
+      lead: issue.content.leadItemId === it.itemId,
+      highlight: (issue.content.highlights ?? []).includes(it.itemId),
+    }));
+  }));
   if (carried.length === 0) return { entries: [], issues: issues.length };
   const rows = await sql<ReportRow[]>`
     SELECT ${REPORT_FIELDS}
