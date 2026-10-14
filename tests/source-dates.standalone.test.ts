@@ -18,6 +18,7 @@ test("a date and time without a zone is in the source's offset, not the server's
 
 test("a bare date is midnight in the source's offset; an ISO date alone stays UTC midnight", () => {
   assert.equal(iso("2026/09/26"), "2026-09-25T16:00:00.000Z");
+  assert.equal(iso("2026_09_26"), "2026-09-25T16:00:00.000Z");
   assert.equal(iso("2026年9月26日"), "2026-09-25T16:00:00.000Z");
   assert.equal(iso("Sep 26, 2026"), "2026-09-25T16:00:00.000Z");
   assert.equal(iso("2026-09-26"), "2026-09-26T00:00:00.000Z");

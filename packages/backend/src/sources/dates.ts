@@ -33,7 +33,7 @@ export function parseLooseDate(value: string | null | undefined, utcOffset = "+0
   if (!value) return null;
   const v = value.trim();
   if (!v) return null;
-  const numeric = /(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})日?(?:(?:T|\s*)(\d{1,2}):(\d{2})(?::(\d{2}))?)?/.exec(v);
+  const numeric = /(\d{4})[-/.年_](\d{1,2})[-/.月_](\d{1,2})日?(?:(?:T|\s*)(\d{1,2}):(\d{2})(?::(\d{2}))?)?/.exec(v);
   if (numeric && !calendarDay(numeric[1]!, numeric[2]!, numeric[3]!)) return null;
   const english = /\b([a-z]{3,9})\s+(\d{1,2})(?:st|nd|rd|th)?[,]?\s+(\d{4})\b/i.exec(v)
     ?? /\b(\d{1,2})\s+([a-z]{3,9})\s+(\d{4})\b/i.exec(v)?.map((part, i, match) => i === 1 ? match[2]! : i === 2 ? match[1]! : part);
@@ -48,7 +48,7 @@ export function parseLooseDate(value: string | null | undefined, utcOffset = "+0
     if (Number.isFinite(direct)) return new Date(direct);
     if (!numeric) return null;
   }
-  // 2026-09-26 / 2026/09/26 / 2026-09-26T10:00 / 2026年9月26日 (+ optional time), interpreted in the given offset.
+  // 2026-09-26 / 2026/09/26 / 2026_09_26 (URL paths) / 2026-09-26T10:00 / 2026年9月26日 (+ optional time), interpreted in the given offset.
   const m = numeric;
   if (m) {
     const [, y, mo, d, h = "00", mi = "00", s = "00"] = m;
