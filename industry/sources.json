@@ -38,6 +38,9 @@
         "parseMode": "html",
         "itemSelector": "a.news-card",
         "titleSelector": ".news-card__title",
+        "detail": {
+          "maxFetches": 30
+        },
         "allowUrlPrefixes": [
           "https://www.dongqiudi.com/articles/"
         ],
@@ -157,6 +160,7 @@
         "url": "https://www.guancha.cn/",
         "parseMode": "html",
         "itemSelector": "a[href*='.shtml']",
+        "publishedAtRegex": "(\\d{4}_\\d{2}_\\d{2})_\\d+\\.shtml",
         "detail": {
           "maxFetches": 80,
           "publishedAtRegex": "\"pubDate\":\"(\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2})\""
