@@ -1,6 +1,7 @@
 // Failure cases: fresh hot signals hide an editorial collection outage; intermittent failures vanish
 // after one success; zero-output counts stop at the display limit; publisher attribution makes a
-// working discovery source look idle; missing dates/repeated edits in signals are called bad articles.
+// working discovery source look idle; missing dates/repeated edits in signals are called bad articles,
+// while an undated article still queued for processing is not one yet.
 import { tag } from "./setup.ts";
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
@@ -81,11 +82,13 @@ test("weekly totals count every silent source and include successful attributed 
   assert.doesNotMatch(text, new RegExp(`· ${collector}`));
 });
 
-test("quality follow-ups count undated editorial articles and edits without judging signal bodies", async () => {
+test("quality follow-ups count processed undated editorial articles and edits, not queued or signal ones", async () => {
   const editorial = await source("quality", "editorial", new Date(now));
   const signal = await source("quality-signal", "hot_signal", new Date(now));
   const article = await material(editorial, "undated-editorial", null);
   await material(signal, "undated-signal", null);
+  await material(editorial, "undated-queued", null);
+  await sql`UPDATE articles SET processing_state = 'analyzed' WHERE id = ${article.articleId}`;
   await sql`INSERT INTO article_revisions(article_id,revision,title,created_at)
     SELECT ${article.articleId},i,'changed',${new Date(now)} FROM generate_series(2,6) i`;
   const findings = await collectFindings(now);

@@ -47,7 +47,9 @@ export async function sourceHealth(now = Date.now()) {
     ), discoveries AS (
       SELECT source_id, count(*)::int AS n FROM seen GROUP BY source_id
     ), items AS (
-      SELECT source_id, count(*)::int AS n, count(*) FILTER (WHERE published_at IS NULL)::int AS undated
+      -- An undated article still queued ('new') has not had its detail or body chance to date it yet;
+      -- only one the pipeline has processed counts as a quality problem.
+      SELECT source_id, count(*)::int AS n, count(*) FILTER (WHERE published_at IS NULL AND processing_state <> 'new')::int AS undated
       FROM articles WHERE discovered_at >= ${since} GROUP BY source_id
     ), revisions AS (
       SELECT article_id FROM article_revisions WHERE created_at >= ${since} AND revision > 1
