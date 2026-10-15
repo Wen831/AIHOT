@@ -10,7 +10,7 @@
         "parseMode": "html",
         "itemSelector": "li",
         "titleSelector": "a",
-        "publishedAtRegex": "zhibo8\\.com/zuqiu/(\\d{4}-\\d{2}-\\d{2})/",
+        "publishedAtRegex": "(?:zhibo8\\.com)?/zuqiu/(\\d{4}-\\d{2}-\\d{2})/",
         "allowUrlPrefixes": [
           "https://news.zhibo8.com/zuqiu/"
         ],
