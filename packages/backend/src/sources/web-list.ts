@@ -175,7 +175,11 @@ export function fromHtml(html: string, base: string, source: SourceRow): Candida
       publishedAt = elementDate(dateEl, c.publishedAtUtcOffset);
     }
     if (!publishedAt && c.publishedAtRegex) {
-      const m = new RegExp(c.publishedAtRegex).exec($.html(el));
+      // The serialized item HTML drifts as sites re-render (scheme-less relative hrefs, entity
+      // re-encoding); the whitelisted absolute URL is the canonical text of the same entry, so
+      // fall back to it before giving up on the listing pattern.
+      const m = new RegExp(c.publishedAtRegex).exec($.html(el))
+        ?? new RegExp(c.publishedAtRegex).exec(url);
       publishedAt = parseLooseDate(m?.[1], c.publishedAtUtcOffset);
     }
     seen.add(url);
