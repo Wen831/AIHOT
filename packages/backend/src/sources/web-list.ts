@@ -175,12 +175,18 @@ export function fromHtml(html: string, base: string, source: SourceRow): Candida
       publishedAt = elementDate(dateEl, c.publishedAtUtcOffset);
     }
     if (!publishedAt && c.publishedAtRegex) {
-      // The serialized item HTML drifts as sites re-render (scheme-less relative hrefs, entity
-      // re-encoding); the whitelisted absolute URL is the canonical text of the same entry, so
-      // fall back to it before giving up on the listing pattern.
+      // The whitelisted absolute URL is the canonical text of the same entry even when the
+      // serialized item HTML drifts as sites re-render, so fall back to it before giving up
+      // on the listing pattern.
       const m = new RegExp(c.publishedAtRegex).exec($.html(el))
         ?? new RegExp(c.publishedAtRegex).exec(url);
-      publishedAt = parseLooseDate(m?.[1], c.publishedAtUtcOffset);
+      // A listing URL's date segment names a local calendar day, not an ISO instant: read it at
+      // the source's offset (00:00 local). Reading "2026-10-17" as 00:00 UTC put late-night finds
+      // 8h in the future, so the pipeline's future tolerance rejected every match-night brief
+      // found before 07:00 Beijing time (36 undated on 2026-10-17).
+      publishedAt = m?.[1]
+        ? parseLooseDate(m[1].replace(/-/g, "/"), c.publishedAtUtcOffset) ?? parseLooseDate(m[1], c.publishedAtUtcOffset)
+        : null;
     }
     seen.add(url);
     out.push({ url, title, publishedAt });

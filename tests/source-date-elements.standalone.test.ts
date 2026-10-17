@@ -34,13 +34,15 @@ test("a scheme-less relative href still yields the date from the resolved URL pa
   // Live-score blocks re-render hrefs without the leading slash ("zuqiu/2026-10-17/x.htm"): the
   // serialized item HTML then lacks the "/zuqiu/" segment the pattern needs, while the resolved
   // absolute URL (…/zuqiu/zuqiu/2026-10-17/…) keeps it — the fallback must date from that.
-  // A bare ISO date parses as UTC midnight (parseLooseDate keeps Date.parse only where it reads
-  // the same on every host), which is the engine's established landing for zhibo8 URL dates.
+  // A listing URL's date segment names a local calendar day, so it parses at the source's offset
+  // (00:00 +08:00): reading it as the ISO instant 00:00 UTC put late-night finds 8h in the
+  // future, and the pipeline's future tolerance rejected every match-night brief found before
+  // 07:00 Beijing time (36 undated on 2026-10-17).
   const listing = `<html><body><li><a href="zuqiu/2026-10-17/native1.htm">比赛短讯标题</a></li></body></html>`;
   const items = fromHtml(listing, "https://news.zhibo8.com/zuqiu/", { config: { url: "https://news.zhibo8.com/zuqiu/", itemSelector: "li", publishedAtRegex: "(?:zhibo8\\.com)?/zuqiu/(\\d{4}-\\d{2}-\\d{2})/" } } as never);
   assert.equal(items.length, 1);
   assert.equal(items[0]!.url, "https://news.zhibo8.com/zuqiu/zuqiu/2026-10-17/native1.htm");
-  assert.equal(items[0]!.publishedAt?.toISOString(), "2026-10-17T00:00:00.000Z");
+  assert.equal(items[0]!.publishedAt?.toISOString(), "2026-10-16T16:00:00.000Z");
 });
 
 test("the URL fallback leaves already-matching href forms unchanged", () => {
@@ -50,5 +52,5 @@ test("the URL fallback leaves already-matching href forms unchanged", () => {
     `</body></html>`;
   const items = fromHtml(listing, "https://news.zhibo8.com/zuqiu/", { config: { url: "https://news.zhibo8.com/zuqiu/", itemSelector: "li", publishedAtRegex: "(?:zhibo8\\.com)?/zuqiu/(\\d{4}-\\d{2}-\\d{2})/" } } as never);
   assert.deepEqual(items.map((i) => i.publishedAt?.toISOString()),
-    ["2026-10-17T00:00:00.000Z", "2026-10-16T00:00:00.000Z"]);
+    ["2026-10-16T16:00:00.000Z", "2026-10-15T16:00:00.000Z"]);
 });
