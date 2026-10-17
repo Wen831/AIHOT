@@ -97,7 +97,13 @@ function extractJson(text: string): unknown {
   try {
     return JSON.parse(body);
   } catch {
-    return JSON.parse(escapeControlCharsInStrings(body));
+    // fall through to the repairs
+  }
+  const escaped = escapeControlCharsInStrings(body);
+  try {
+    return JSON.parse(escaped);
+  } catch {
+    return JSON.parse(repairUnescapedQuotesInStrings(escaped));
   }
 }
 
@@ -114,6 +120,34 @@ export function escapeControlCharsInStrings(json: string): string {
       else if (ch < " ") {
         out += ch === "\n" ? "\\n" : ch === "\r" ? "\\r" : ch === "\t" ? "\\t" : `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`;
         continue;
+      }
+    } else if (ch === '"') inString = true;
+    out += ch;
+  }
+  return out;
+}
+
+/** Models sometimes drop the backslash before a quote inside a string value (实现"所见即所得" written with ASCII quotes);
+    a quote no structural character follows cannot have closed the string, so escape it. In valid JSON a closing
+    quote is always followed by ",", ":", "}", "]" or whitespace, so this never rewires a parseable answer. */
+export function repairUnescapedQuotesInStrings(json: string): string {
+  let out = "";
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < json.length; i++) {
+    const ch = json[i]!;
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') {
+        let j = i + 1;
+        while (j < json.length && (json[j] === " " || json[j] === "\t" || json[j] === "\n" || json[j] === "\r")) j++;
+        const next = json[j];
+        if (next !== undefined && next !== "," && next !== ":" && next !== "}" && next !== "]") {
+          out += '\\"';
+          continue;
+        }
+        inString = false;
       }
     } else if (ch === '"') inString = true;
     out += ch;

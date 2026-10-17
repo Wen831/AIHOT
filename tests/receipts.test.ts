@@ -1,6 +1,7 @@
 // Paid requests: an answer already received is reused, every request actually sent counts against the
 // budget (retries of one logical request included), a lost answer is bought again at most once, an
-// answer cut off at the output limit says so, and the valve stops calls before they are sent.
+// answer cut off at the output limit says so, quotes the model left unescaped inside strings are
+// repaired, and the valve stops calls before they are sent.
 import { gate, stub, tag } from "./setup.ts";
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
@@ -133,6 +134,17 @@ test("an answer cut off at the output limit is a failed paid answer that says so
     process.env.DEEPSEEK_BASE_URL = original;
     await cut.close();
   }
+});
+
+test("quotes the model left unescaped inside string values are repaired instead of rejected", async () => {
+  answer = () => '{"ok":true,"note":"多地细则落地"所见即所得"进入实施"}';
+  const subject = `repair-${tag()}`;
+  const result = await chatJson({ model: "deepseek-flash", purpose: "invariant_test", subject, promptVersion: "t1", system: "s", user: `input ${subject}`, schema: z.object({ ok: z.boolean(), note: z.string() }) });
+  assert.deepEqual(result.data, { ok: true, note: '多地细则落地"所见即所得"进入实施' });
+  answer = () => '{"ok":true}';
+  assert.equal((await ask(`plain-${tag()}`)).data.ok, true);
+  answer = () => '{"ok": yes}';
+  await assert.rejects(ask(`broken-${tag()}`), ModelOutputError);
 });
 
 test("retries of unusable answers stop at the budget, and every request sent is counted", async () => {
