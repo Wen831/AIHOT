@@ -2,5 +2,6 @@
 import type { ServerModule } from "@aihot/backend/modules";
 import { showcaseServer } from "@aihot/showcase/server";
 import { lexiconGuardServer } from "@aihot/lexicon-guard/server";
+import { resultsServer } from "@aihot/results/server";
 
-export const SERVER_MODULES: readonly ServerModule[] = [showcaseServer, lexiconGuardServer];
+export const SERVER_MODULES: readonly ServerModule[] = [showcaseServer, lexiconGuardServer, resultsServer];

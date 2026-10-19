@@ -15,7 +15,7 @@ import { logError } from "../lib/log-error.ts";
 import { chatJson } from "../providers/llm.ts";
 import { completeReceipt } from "../providers/receipts.ts";
 import { shutdownSignal } from "../jobs/queue.ts";
-import { emit } from "../modules.ts";
+import { emit, dailyResults, type ResultMatch } from "../modules.ts";
 import { arrangeDaily, candidates, dailyEdition, dailyMemory, periodEntries, reportEntry, resultReports, sectionOf, SECTION_ORDER, type Candidate, type DailyEntry, type EditionEntry } from "./edition.ts";
 
 export const REPORT_VERSION = promptVersion("report-period", "report-period-sections", "report-period-no-sections");
@@ -80,18 +80,68 @@ function windowPoint(at: Date): string {
   return `${Number(day.slice(5, 7))} 月 ${Number(day.slice(8, 10))} 日 ${beijingTime(at)}`;
 }
 
+/** A finished match's row in the results section: the scoreline itself, linked to the score board.
+ * It is not a report, so it carries no item id — every reader of one treats a blank as "no detail
+ * page", which is what a match row is: its link is the board's, in sourceUrl. */
+function matchEntry(m: ResultMatch): DailyEntry {
+  return {
+    itemId: ``,
+    factId: null,
+    storyPublicId: null,
+    title: `${m.league}${m.round ? ` ${m.round}` : ""}：${m.home} ${m.homeScore}-${m.awayScore} ${m.away}`,
+    summary: "",
+    sourceName: "直播吧比分",
+    sourceUrl: "https://www.188bifen.com/",
+    sourceId: "",
+    firstParty: false,
+    role: "比分",
+    score: null,
+    publishedAt: m.startAt.toISOString(),
+    sources: 1,
+  };
+}
+
+/**
+ * The section's order over a score source's matches: a watched team's match first (either side,
+ * substring-wise), then the whitelisted leagues in their listed order, latest kickoff first within a
+ * rank. A match of neither is not the reader's result section: dropped.
+ */
+function rankResultMatches(matches: readonly ResultMatch[], cfg: { teams: string[]; leagues: string[] }): ResultMatch[] {
+  const rank = (m: ResultMatch): number => {
+    const teams = `${m.home}${m.away}`;
+    if (cfg.teams.some((t) => teams.includes(t))) return 0;
+    const league = cfg.leagues.indexOf(m.league);
+    return league === -1 ? Number.POSITIVE_INFINITY : league + 1;
+  };
+  return [...matches]
+    .map((m) => ({ m, r: rank(m) }))
+    .filter(({ r }) => Number.isFinite(r))
+    .sort((x, y) => x.r - y.r || y.m.startAt.getTime() - x.m.startAt.getTime())
+    .map(({ m }) => m);
+}
+
 /**
  * The industry's result section for a daily (RESULT_SECTION), or null when the industry has none or
- * nothing qualifies: the window's unselected tagged results, one entry per fact, best first, minus
- * what the issue already carries (by report or by fact) and what recent issues cited. A report that
- * never grouped answers to no fact, so nothing vouches for it being a finished match rather than a
- * mid-match flash — match-day feeds are full of those — and the section lists matches, not reports.
- * Built after the arrangement so its items never compete for the main entries, and stored as its
- * own section so they stay out of the weekly/monthly candidates.
+ * nothing qualifies. With a score-source module installed (dailyResults) it is the window's finished
+ * matches, one row each, ranked by the industry's watched teams and whitelisted leagues — match-day
+ * feeds flood a report-flow section with mid-match flashes, so the section reads matches, not
+ * reports. Without one it falls back to the window's unselected tagged results: one entry per fact,
+ * best first, minus what the issue already carries (by report or by fact) and what recent issues
+ * cited; a report that never grouped answers to no fact, so nothing vouches for it being a finished
+ * match. Built after the arrangement so its items never compete for the main entries, and stored as
+ * its own section so they stay out of the weekly/monthly candidates.
  */
 async function resultSection(date: string, start: Date, end: Date, issue: { main: EditionEntry[]; flashes: EditionEntry[] }): Promise<{ label: string; items: DailyEntry[] } | null> {
   const cfg = RESULT_SECTION;
   if (!cfg) return null;
+  const feeder = dailyResults();
+  if (feeder) {
+    const matches = await feeder.matches({ start, end });
+    if (matches) {
+      const items = rankResultMatches(matches, cfg).slice(0, cfg.maxItems).map(matchEntry);
+      return items.length ? { label: cfg.label, items } : null;
+    }
+  }
   const [memory, rows] = await Promise.all([dailyMemory(date), resultReports(start, end, cfg.category, cfg.tag, cfg.minScore)]);
   const carriedIds = new Set([...issue.main, ...issue.flashes].map((e) => e.entry.itemId));
   const carriedFacts = new Set([...issue.main, ...issue.flashes].flatMap((e) => (e.entry.factId ? [e.entry.factId] : [])));

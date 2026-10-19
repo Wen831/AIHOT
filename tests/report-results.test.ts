@@ -1,12 +1,16 @@
-// The industry's 赛果 section (industry/taxonomy.ts RESULT_SECTION): a daily's own section for the
-// window's tagged results that scored past the floor but were never selected — best first, capped,
-// one entry per fact (a report that never grouped does not make the section at all), not repeated
-// from what this issue or recent issues already carry, and never a weekly/monthly candidate.
+// The industry's 赛果 section (industry/taxonomy.ts RESULT_SECTION): with a score-source module
+// installed it is the window's finished matches, one row each, ranked by the industry's watched
+// teams and whitelisted leagues. Without one it falls back to the report flow: the window's tagged
+// results that scored past the floor but were never selected — best first, capped, one entry per
+// fact (a report that never grouped does not make the section at all), not repeated from what this
+// issue or recent issues already carry, and never a weekly/monthly candidate. The issue's own
+// entries, meanwhile, carry no pre-match build-ups or single-match post-match talk.
 import { editionAt, tag } from "./setup.ts";
 import assert from "node:assert/strict";
 import { after, before, beforeEach, test } from "node:test";
 import { closeDb, sql } from "@aihot/backend/db";
 import { stopBoss } from "@aihot/backend/jobs/queue";
+import { installModules } from "@aihot/backend/modules";
 import { composeDaily } from "@aihot/backend/reports/compose";
 import { periodEntries } from "@aihot/backend/reports/edition";
 
@@ -34,7 +38,7 @@ async function item(id: string, opts: { score: number; selected?: boolean; tags?
 }
 const sections = async (key: string) => {
   const [row] = await sql`SELECT content FROM reports WHERE kind = 'daily' AND key = ${key}`;
-  return (row!.content as { sections: Array<{ label: string; items: Array<{ itemId: string }> }> }).sections;
+  return (row!.content as { sections: Array<{ label: string; items: Array<{ itemId: string; title?: string }> }> }).sections;
 };
 
 before(async () => {
@@ -115,4 +119,46 @@ test("the section's items never become weekly/monthly candidates", async () => {
   const ids = entries.map((e) => e.itemId);
   assert.ok(ids.includes(anchor), "a main entry is a period candidate");
   assert.ok(!ids.includes(result), "a 赛果 item is not");
+});
+
+test("with a score source the section lists finished matches, watched teams and leagues first", async () => {
+  await item(`${T}-anchor`, { score: 90, selected: true, factId: await fact("anchor") });
+  const kickoff = editionAt("daily", DATE, -6 * 3600).getTime();
+  installModules([{
+    name: "results-test",
+    dailyResults: {
+      matches: async () => [
+        { id: 1, league: "西甲", round: "第9轮", home: "巴萨", away: "贝蒂斯", homeScore: 5, awayScore: 2, startAt: new Date(kickoff + 3600_000) },
+        { id: 2, league: "英超", round: "第7轮", home: "曼城", away: "伊普斯维奇", homeScore: 3, awayScore: 2, startAt: new Date(kickoff) },
+        { id: 3, league: "欧冠", round: "联赛阶段", home: "拜仁", away: "巴黎圣日耳曼", homeScore: 2, awayScore: 1, startAt: new Date(kickoff) },
+        { id: 4, league: "西甲", round: "第9轮", home: "皇家马德里", away: "塞维利亚", homeScore: 4, awayScore: 1, startAt: new Date(kickoff) },
+        { id: 5, league: "中超", round: "第28轮", home: "上海海港", away: "成都蓉城", homeScore: 3, awayScore: 0, startAt: new Date(kickoff) },
+      ],
+    },
+  }]);
+  try {
+    await composeDaily(DATE);
+    const section = (await sections(DATE)).at(-1)!;
+    assert.equal(section.label, "赛果");
+    assert.deepEqual(section.items.map((i) => i.title), [
+      "西甲 第9轮：巴萨 5-2 贝蒂斯",
+      "英超 第7轮：曼城 3-2 伊普斯维奇",
+      "欧冠 联赛阶段：拜仁 2-1 巴黎圣日耳曼",
+      "西甲 第9轮：皇家马德里 4-1 塞维利亚",
+    ], "watched teams (latest first), then the leagues in their listed order; a league of neither is dropped");
+    assert.ok(section.items.every((i) => !i.itemId), "a match row is no report: no item id, no detail page");
+  } finally {
+    installModules([]);
+  }
+});
+
+test("pre-match build-ups and single-match post-match talk stay out of the issue's own entries", async () => {
+  const kept = await item(`${T}-keeper`, { score: 85, selected: true, factId: await fact("keeper") });
+  await item(`${T}-prematch`, { score: 88, selected: true, tags: ["赛前动态"], factId: await fact("prematch") });
+  await item(`${T}-talk`, { score: 87, selected: true, tags: ["深度/观点", "赛后言论"], factId: await fact("talk") });
+  await composeDaily(DATE);
+  const named = (await sections(DATE)).flatMap((s) => s.items).map((i) => i.itemId);
+  assert.ok(named.includes(kept), "a plain match report stays a main entry");
+  assert.ok(!named.includes(`${T}-prematch`), "a pre-match build-up is not a main entry");
+  assert.ok(!named.includes(`${T}-talk`), "single-match post-match talk is not a main entry");
 });

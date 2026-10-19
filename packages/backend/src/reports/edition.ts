@@ -7,7 +7,7 @@
 // independent participants, first-hand), and the first one leads. Sections are the industry pack's
 // (industry/taxonomy.ts CATEGORIES).
 import { addDays } from "@aihot/contracts/time";
-import { CATEGORIES, RESULT_SECTION } from "@aihot/industry/taxonomy";
+import { CATEGORIES, DAILY_EXCLUDED_TAGS, RESULT_SECTION } from "@aihot/industry/taxonomy";
 import { sql } from "../db.ts";
 import { currentSignals } from "../events/hot.ts";
 import { pickRepresentative, representativePriority, REPRESENTATIVE_COLUMNS, type RepresentativeIdentity } from "../publication/representative.ts";
@@ -318,13 +318,16 @@ interface Fact { key: string; rows: ReportRow[]; selected: boolean; sources: str
 /**
  * The daily's events for the window [start, end), most important first, before the editors' pass:
  * selected reports and missed facts, minus what the week's issues already carried, one entry per event.
+ * An event whose reports are all pre-match build-ups or single-match post-match talk is not
+ * news for the issue's own pages (DAILY_EXCLUDED_TAGS): its match appears in the results section.
  */
 export async function dailyEdition(date: string, start: Date, end: Date): Promise<{ entries: EditionEntry[]; stats: Record<string, number> }> {
   const [memory, selected, missed, judged] = await Promise.all([dailyMemory(date), periodReports(start, end), missedFacts(start, end), judgedReports(start, end)]);
+  const excluded = (tags: readonly string[] | null) => !!tags && (tags[0] === DAILY_EXCLUDED_TAGS.categoryTag || tags.includes(DAILY_EXCLUDED_TAGS.topicTag));
   const raw = [
     ...[...groupBy(selected, factKeyOf)].map(([key, rows]) => ({ key, rows, selected: true })),
     ...missed.map((m) => ({ ...m, selected: false })),
-  ];
+  ].filter((f) => !f.rows.every((r) => excluded(r.tags)));
   const kept = raw.filter((f) => !memory.keys.has(f.key) && !f.rows.some((r) => memory.keys.has(`a:${r.id}`)));
   const factIds = [...new Set(kept.map((f) => f.rows[0]!.fact_id).filter((id): id is number => id !== null))];
   const sourcesOf = await factSources(factIds, end);

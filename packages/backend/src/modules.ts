@@ -48,6 +48,31 @@ export interface LocalGuard {
   screen: (input: { title: string; summary: string; body: string }) => string | null;
 }
 
+/** One finished match, as a score source read it (DailyResults below). */
+export interface ResultMatch {
+  /** Stable across fetches; becomes the section row's item id. */
+  id: number | string;
+  league: string;
+  /** e.g. "第9轮"; may be empty. */
+  round: string;
+  home: string;
+  away: string;
+  homeScore: number;
+  awayScore: number;
+  /** Kickoff: the row's time in the issue. */
+  startAt: Date;
+}
+
+/**
+ * A daily's result section as finished matches (a score-source module, reports/compose.ts): what it
+ * hands back replaces the report-flow fallback for that section — one row per match, best first by
+ * the industry's RESULT_SECTION ranking (watched teams, then whitelisted leagues), not per report.
+ * It answers for a window the way the report flow does; null keeps the fallback.
+ */
+export interface DailyResults {
+  matches: (window: { start: Date; end: Date }) => Promise<ResultMatch[] | null>;
+}
+
 /** A cron schedule (Asia/Shanghai), recorded in job_runs like the engine's (apps/worker/src/schedules.ts). */
 export interface Scheduled {
   name: string;
@@ -255,6 +280,8 @@ export interface ServerModule {
     runs?: () => Promise<unknown>;
   };
   models?: Record<string, ModelStep>;
+  /** A score source for the daily's result section, when the module has one. */
+  dailyResults?: DailyResults;
   /** Cron schedules (the worker). */
   schedules?: Scheduled[];
   /** What is wrong now, for the owner's alerts (operations/alerts.ts), after the engine's problems. */
@@ -347,6 +374,11 @@ export function participationMode(mode: string | null | undefined): Participatio
 /** The first installed module's local guard, if any (editorial/analyze.ts screens material with it). */
 export function localGuard(): LocalGuard | null {
   return installed.find((m) => m.localGuard)?.localGuard ?? null;
+}
+
+/** The first installed module's score source for the daily's result section, if any (reports/compose.ts). */
+export function dailyResults(): DailyResults | null {
+  return installed.find((m) => m.dailyResults)?.dailyResults ?? null;
 }
 
 /** The first installed module's reminder for the person behind this request, at this exit. */
