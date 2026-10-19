@@ -54,11 +54,11 @@ export const PRESETS: Record<string, ModelPreset> = {
     service: "dashscope", model: "qwen3-vl-flash", baseUrlEnv: "DASHSCOPE_BASE_URL", apiKeyEnv: "DASHSCOPE_API_KEY",
     extra: { enable_thinking: false }, jsonMode: false, vision: true,
   },
-  // M3.1 Flash Preview refuses thinking:{type:"disabled"} with HTTP 400 (reasoning is forced); the
+  // M3.1 Flash refuses thinking:{type:"disabled"} with HTTP 400 (reasoning is forced); the
   // lowest effort keeps it cheap, and response_format JSON mode is not documented — off, extractJson
   // falls back. The -think key suffix buys the extra max_tokens headroom reasoning burns.
   "minimax-m3.1-flash-think": {
-    service: "minimax", model: "MiniMax-M3.1-Flash-Preview", baseUrlEnv: "MINIMAX_BASE_URL", apiKeyEnv: "MINIMAX_API_KEY",
+    service: "minimax", model: "MiniMax-M3.1-Flash", baseUrlEnv: "MINIMAX_BASE_URL", apiKeyEnv: "MINIMAX_API_KEY",
     extra: { thinking: { type: "adaptive" }, reasoning_effort: "low" }, jsonMode: false,
   },
 };
