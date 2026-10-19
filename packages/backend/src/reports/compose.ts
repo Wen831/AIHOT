@@ -82,10 +82,12 @@ function windowPoint(at: Date): string {
 
 /**
  * The industry's result section for a daily (RESULT_SECTION), or null when the industry has none or
- * nothing qualifies: the window's unselected tagged results, best first, minus what the issue already
- * carries (by report or by fact) and what recent issues cited. Built after the arrangement so its
- * items never compete for the main entries, and stored as its own section so they stay out of the
- * weekly/monthly candidates.
+ * nothing qualifies: the window's unselected tagged results, one entry per fact, best first, minus
+ * what the issue already carries (by report or by fact) and what recent issues cited. A report that
+ * never grouped answers to no fact, so nothing vouches for it being a finished match rather than a
+ * mid-match flash — match-day feeds are full of those — and the section lists matches, not reports.
+ * Built after the arrangement so its items never compete for the main entries, and stored as its
+ * own section so they stay out of the weekly/monthly candidates.
  */
 async function resultSection(date: string, start: Date, end: Date, issue: { main: EditionEntry[]; flashes: EditionEntry[] }): Promise<{ label: string; items: DailyEntry[] } | null> {
   const cfg = RESULT_SECTION;
@@ -93,10 +95,16 @@ async function resultSection(date: string, start: Date, end: Date, issue: { main
   const [memory, rows] = await Promise.all([dailyMemory(date), resultReports(start, end, cfg.category, cfg.tag, cfg.minScore)]);
   const carriedIds = new Set([...issue.main, ...issue.flashes].map((e) => e.entry.itemId));
   const carriedFacts = new Set([...issue.main, ...issue.flashes].flatMap((e) => (e.entry.factId ? [e.entry.factId] : [])));
+  const claimedFacts = new Set<string>();
   const items = rows
     .filter((r) => !carriedIds.has(r.id)
       && !(r.fact_public_id && (carriedFacts.has(r.fact_public_id) || memory.keys.has(r.fact_public_id)))
       && !memory.keys.has(`a:${r.id}`))
+    .filter((r) => {
+      if (!r.fact_public_id || claimedFacts.has(r.fact_public_id)) return false;
+      claimedFacts.add(r.fact_public_id);
+      return true;
+    })
     .slice(0, cfg.maxItems)
     .map((r) => ({ ...reportEntry(r), sources: 1 }));
   return items.length ? { label: cfg.label, items } : null;

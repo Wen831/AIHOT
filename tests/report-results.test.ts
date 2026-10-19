@@ -1,6 +1,7 @@
 // The industry's 赛果 section (industry/taxonomy.ts RESULT_SECTION): a daily's own section for the
 // window's tagged results that scored past the floor but were never selected — best first, capped,
-// not repeated from what this issue or recent issues already carry, and never a weekly/monthly candidate.
+// one entry per fact (a report that never grouped does not make the section at all), not repeated
+// from what this issue or recent issues already carry, and never a weekly/monthly candidate.
 import { editionAt, tag } from "./setup.ts";
 import assert from "node:assert/strict";
 import { after, before, beforeEach, test } from "node:test";
@@ -14,6 +15,12 @@ const SOURCE = `report-results-${T}`;
 const DATE = "2024-06-05";
 /** Half a day before the edition time: inside the issue's window. */
 const at = editionAt("daily", DATE, -12 * 3600);
+
+let factSeq = 0;
+async function fact(name: string) {
+  const [row] = await sql<{ id: number }[]>`INSERT INTO facts (public_id, title) VALUES (${`${name}-${T}-${++factSeq}`}, ${name}) RETURNING id`;
+  return row!.id;
+}
 
 /** A publications row in the window; selected items are main entries, unselected ones 赛果 material.
  * Unselected items carry no release time (they are listed as soon as they exist). */
@@ -43,25 +50,29 @@ after(async () => {
 });
 
 test("the daily ends with a 赛果 section: unselected tagged results past the floor, best first", async () => {
-  const [fact] = await sql<{ id: number }[]>`INSERT INTO facts (public_id, title) VALUES (${`fact-${T}`}, ${`事实-${T}`}) RETURNING id`;
-  const anchor = await item(`${T}-anchor`, { score: 90, selected: true, factId: fact!.id });
-  const twin = await item(`${T}-twin`, { score: 75, factId: fact!.id });
-  const high = await item(`${T}-high`, { score: 63 });
-  const mid = await item(`${T}-mid`, { score: 57 });
-  await item(`${T}-low`, { score: 30 });
-  await item(`${T}-untagged`, { score: 70, tags: ["深度/观点"] });
+  const anchorFact = await fact("anchor");
+  const highFact = await fact("high");
+  const midFact = await fact("mid");
+  const anchor = await item(`${T}-anchor`, { score: 90, selected: true, factId: anchorFact });
+  const twin = await item(`${T}-twin`, { score: 75, factId: anchorFact });
+  const high = await item(`${T}-high`, { score: 63, factId: highFact });
+  await item(`${T}-high2`, { score: 55, factId: highFact });
+  const mid = await item(`${T}-mid`, { score: 57, factId: midFact });
+  await item(`${T}-low`, { score: 30, factId: await fact("low") });
+  await item(`${T}-untagged`, { score: 70, tags: ["深度/观点"], factId: await fact("untagged") });
   await composeDaily(DATE);
   const section = (await sections(DATE)).at(-1)!;
   assert.equal(section.label, "赛果");
   assert.deepEqual(section.items.map((i) => i.itemId), [high, mid], "score order, floor and tag respected");
   assert.ok(!section.items.some((i) => i.itemId === anchor), "a selected report stays in its own section");
   assert.ok(!section.items.some((i) => i.itemId === twin), "a report of an already-carried fact does not repeat");
+  assert.ok(!section.items.some((i) => i.itemId === `${T}-high2`), "a fact appears once, by its best report");
 });
 
 test("the section skips what the issue carries and what a recent issue cited", async () => {
   const anchor = await item(`${T}-anchor`, { score: 90, selected: true });
-  const cited = await item(`${T}-cited`, { score: 63 });
-  await item(`${T}-fresh`, { score: 57 });
+  const cited = await item(`${T}-cited`, { score: 63, factId: await fact("cited") });
+  await item(`${T}-fresh`, { score: 57, factId: await fact("fresh") });
   await composeDaily(DATE);
   let section = (await sections(DATE)).at(-1)!;
   assert.equal(section.label, "赛果");
@@ -76,8 +87,8 @@ test("the section skips what the issue carries and what a recent issue cited", a
 });
 
 test("the section holds at most its cap of items", async () => {
-  await item(`${T}-anchor`, { score: 90, selected: true });
-  for (let i = 0; i < 14; i++) await item(`${T}-r${i}`, { score: 65 - i });
+  await item(`${T}-anchor`, { score: 90, selected: true, factId: await fact("anchor") });
+  for (let i = 0; i < 14; i++) await item(`${T}-r${i}`, { score: 65 - i, factId: await fact(`r${i}`) });
   await composeDaily(DATE);
   const section = (await sections(DATE)).at(-1)!;
   assert.equal(section.label, "赛果");
@@ -86,9 +97,19 @@ test("the section holds at most its cap of items", async () => {
   assert.equal(section.items.at(-1)!.itemId, `${T}-r11`);
 });
 
+test("an ungrouped report never makes the section: nothing vouches for a finished match", async () => {
+  await item(`${T}-anchor`, { score: 90, selected: true, factId: await fact("anchor") });
+  await item(`${T}-loose`, { score: 63 });
+  const grouped = await item(`${T}-grouped`, { score: 57, factId: await fact("grouped") });
+  await composeDaily(DATE);
+  const section = (await sections(DATE)).at(-1)!;
+  assert.equal(section.label, "赛果");
+  assert.deepEqual(section.items.map((i) => i.itemId), [grouped]);
+});
+
 test("the section's items never become weekly/monthly candidates", async () => {
-  const anchor = await item(`${T}-anchor`, { score: 90, selected: true });
-  const result = await item(`${T}-high`, { score: 63 });
+  const anchor = await item(`${T}-anchor`, { score: 90, selected: true, factId: await fact("anchor") });
+  const result = await item(`${T}-high`, { score: 63, factId: await fact("high") });
   await composeDaily(DATE);
   const { entries } = await periodEntries(DATE, DATE);
   const ids = entries.map((e) => e.itemId);
