@@ -83,7 +83,7 @@ export interface EditionEntry {
   previous: { key: string; title: string } | null;
 }
 
-type ReportRow = RepresentativeIdentity & {
+export type ReportRow = RepresentativeIdentity & {
   id: string; title: string; summary: string | null; url: string; category: string | null; tags: string[]; score: number | null;
   first_party: boolean; body_mode: "full" | "summary"; timeline_at: Date;
   source_id: string; source_name: string; source_kind: string;
@@ -134,6 +134,24 @@ export async function resultReports(start: Date, end: Date, category: string, ta
     LEFT JOIN facts f ON f.id = p.fact_id AND ${ownFactEvidenceCondition()}
     LEFT JOIN stories st ON st.id = f.story_id
     WHERE p.visibility = 'public' AND p.eligible AND NOT p.selected AND NOT p.backfill
+      AND p.category = ${category} AND p.tags @> ${[tag]}::text[] AND p.score >= ${minScore}
+      AND p.timeline_at >= ${start} AND p.timeline_at < ${end}
+    ORDER BY p.score DESC, p.article_id`;
+}
+
+/**
+ * Every tagged result report of the window, selected ones included: the score-source section's
+ * copy for a match — its best report's headline is the match's line, and a match with none is not
+ * one the feeds bothered to write up, so (unless a watched team plays it) it is not the reader's
+ * result section either.
+ */
+export async function matchReports(start: Date, end: Date, category: string, tag: string, minScore: number): Promise<ReportRow[]> {
+  return sql<ReportRow[]>`
+    SELECT ${REPORT_FIELDS}
+    FROM publications p JOIN sources s ON s.id = p.source_id
+    LEFT JOIN facts f ON f.id = p.fact_id AND ${ownFactEvidenceCondition()}
+    LEFT JOIN stories st ON st.id = f.story_id
+    WHERE p.visibility = 'public' AND p.eligible AND NOT p.backfill
       AND p.category = ${category} AND p.tags @> ${[tag]}::text[] AND p.score >= ${minScore}
       AND p.timeline_at >= ${start} AND p.timeline_at < ${end}
     ORDER BY p.score DESC, p.article_id`;

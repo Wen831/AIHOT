@@ -28,11 +28,11 @@ async function fact(name: string) {
 
 /** A publications row in the window; selected items are main entries, unselected ones 赛果 material.
  * Unselected items carry no release time (they are listed as soon as they exist). */
-async function item(id: string, opts: { score: number; selected?: boolean; tags?: string[]; category?: string; factId?: number }) {
+async function item(id: string, opts: { score: number; selected?: boolean; tags?: string[]; category?: string; factId?: number; title?: string }) {
   await sql`INSERT INTO articles (id, source_id, identity_key, url, title, discovered_at, timeline_at)
-    VALUES (${id}, ${SOURCE}, ${id}, ${`https://example.com/${id}`}, ${id}, ${at}, ${at})`;
+    VALUES (${id}, ${SOURCE}, ${id}, ${`https://example.com/${id}`}, ${opts.title ?? id}, ${at}, ${at})`;
   await sql`INSERT INTO publications (article_id, title, source_id, channel, url, discovered_at, timeline_at, sort_at, eligible, selected, visible_after, visibility, score, category, tags, fact_id)
-    VALUES (${id}, ${id}, ${SOURCE}, 'news', ${`https://example.com/${id}`}, ${at}, ${at}, ${at}, true, ${opts.selected ?? false}, ${opts.selected ? at : null}, 'public', ${opts.score}, ${opts.category ?? "match"}, ${opts.tags ?? ["比赛赛果"]}, ${opts.factId ?? null})`;
+    VALUES (${id}, ${opts.title ?? id}, ${SOURCE}, 'news', ${`https://example.com/${id}`}, ${at}, ${at}, ${at}, true, ${opts.selected ?? false}, ${opts.selected ? at : null}, 'public', ${opts.score}, ${opts.category ?? "match"}, ${opts.tags ?? ["比赛赛果"]}, ${opts.factId ?? null})`;
   if (opts.factId) await sql`INSERT INTO fact_articles (fact_id, article_id, role) VALUES (${opts.factId}, ${id}, 'report')`;
   return id;
 }
@@ -121,16 +121,19 @@ test("the section's items never become weekly/monthly candidates", async () => {
   assert.ok(!ids.includes(result), "a 赛果 item is not");
 });
 
-test("with a score source the section lists finished matches, watched teams and leagues first", async () => {
+test("with a score source the section lists finished matches with the feeds' write-ups, small teams out", async () => {
   await item(`${T}-anchor`, { score: 90, selected: true, factId: await fact("anchor") });
-  const kickoff = editionAt("daily", DATE, -6 * 3600).getTime();
+  // The feeds' write-ups: both name their match's sides (巴萨/贝蒂斯, 皇马/塞维利亚 in any spelling).
+  const barca = await item(`${T}-barca`, { score: 68, factId: await fact("barca"), title: "巴萨客场5-2十人贝蒂斯 亚马尔传射罗德里首球" });
+  const real = await item(`${T}-real`, { score: 71, factId: await fact("real"), title: "皇马4-1塞维利亚 姆巴佩双响迪奥曼德传射" });
+  const kickoff = editionAt("daily", DATE, -14 * 3600).getTime();
   installModules([{
     name: "results-test",
     dailyResults: {
       matches: async () => [
-        { id: 1, league: "西甲", round: "第9轮", home: "巴萨", away: "贝蒂斯", homeScore: 5, awayScore: 2, startAt: new Date(kickoff + 3600_000) },
-        { id: 2, league: "英超", round: "第7轮", home: "曼城", away: "伊普斯维奇", homeScore: 3, awayScore: 2, startAt: new Date(kickoff) },
-        { id: 3, league: "欧冠", round: "联赛阶段", home: "拜仁", away: "巴黎圣日耳曼", homeScore: 2, awayScore: 1, startAt: new Date(kickoff) },
+        { id: 1, league: "西甲", round: "第9轮", home: "巴塞罗那", away: "皇家贝蒂斯", homeScore: 5, awayScore: 2, startAt: new Date(kickoff + 3600_000) },
+        { id: 2, league: "英超", round: "第7轮", home: "曼彻斯特城", away: "伊普斯维奇", homeScore: 3, awayScore: 2, startAt: new Date(kickoff) },
+        { id: 3, league: "欧冠", round: "联赛阶段", home: "拜仁慕尼黑", away: "巴黎圣日耳曼", homeScore: 2, awayScore: 1, startAt: new Date(kickoff) },
         { id: 4, league: "西甲", round: "第9轮", home: "皇家马德里", away: "塞维利亚", homeScore: 4, awayScore: 1, startAt: new Date(kickoff) },
         { id: 5, league: "中超", round: "第28轮", home: "上海海港", away: "成都蓉城", homeScore: 3, awayScore: 0, startAt: new Date(kickoff) },
       ],
@@ -141,12 +144,19 @@ test("with a score source the section lists finished matches, watched teams and 
     const section = (await sections(DATE)).at(-1)!;
     assert.equal(section.label, "赛果");
     assert.deepEqual(section.items.map((i) => i.title), [
-      "西甲 第9轮：巴萨 5-2 贝蒂斯",
-      "英超 第7轮：曼城 3-2 伊普斯维奇",
-      "欧冠 联赛阶段：拜仁 2-1 巴黎圣日耳曼",
+      "西甲 第9轮：巴塞罗那 5-2 皇家贝蒂斯",
+      "英超 第7轮：曼彻斯特城 3-2 伊普斯维奇",
       "西甲 第9轮：皇家马德里 4-1 塞维利亚",
-    ], "watched teams (latest first), then the leagues in their listed order; a league of neither is dropped");
-    assert.ok(section.items.every((i) => !i.itemId), "a match row is no report: no item id, no detail page");
+    ], "watched teams first (latest kickoff first), then leagues in order; a league of neither is dropped");
+    assert.equal(section.items[0]!.itemId, barca, "a match with a write-up links to it as its row");
+    assert.equal(section.items[0]!.title, "西甲 第9轮：巴塞罗那 5-2 皇家贝蒂斯");
+    // The write-up headline rides along as the row's summary — the scorers and cards are in it.
+    const [row] = await sql<{ content: unknown }[]>`SELECT content FROM reports WHERE kind = 'daily' AND key = ${DATE}`;
+    const saved = (row!.content as { sections: Array<{ label: string; items: Array<{ itemId: string; summary: string }> }> }).sections.at(-1)!;
+    assert.equal(saved.items[0]!.summary, "巴萨客场5-2十人贝蒂斯 亚马尔传射罗德里首球");
+    assert.equal(saved.items[2]!.itemId, real);
+    assert.ok(!section.items.some((i) => i.title?.includes("拜仁")), "a match no feed wrote about is a small team's: dropped");
+    assert.ok(section.items[1]!.itemId === "", "a watched team with no write-up keeps its bare scoreline");
   } finally {
     installModules([]);
   }

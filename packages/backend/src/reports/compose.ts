@@ -5,7 +5,7 @@
 // (industry/prompts/report-period*.md).
 import { z } from "zod";
 import { EDITION_TIMES, REPORTS, SITE } from "@aihot/site";
-import { PLAIN_TERMS, RELEASE, RESULT_SECTION } from "@aihot/industry/taxonomy";
+import { PLAIN_TERMS, RELEASE, RESULT_SECTION, TEAM_ALIASES } from "@aihot/industry/taxonomy";
 import { promptText, promptVersion } from "../editorial/prompts.ts";
 import { modelFor } from "../editorial/models.ts";
 import { ENTITIES, isRelease } from "../editorial/vocabulary.ts";
@@ -16,7 +16,7 @@ import { chatJson } from "../providers/llm.ts";
 import { completeReceipt } from "../providers/receipts.ts";
 import { shutdownSignal } from "../jobs/queue.ts";
 import { emit, dailyResults, type ResultMatch } from "../modules.ts";
-import { arrangeDaily, candidates, dailyEdition, dailyMemory, periodEntries, reportEntry, resultReports, sectionOf, SECTION_ORDER, type Candidate, type DailyEntry, type EditionEntry } from "./edition.ts";
+import { arrangeDaily, candidates, dailyEdition, dailyMemory, matchReports, periodEntries, reportEntry, resultReports, sectionOf, SECTION_ORDER, type Candidate, type DailyEntry, type EditionEntry, type ReportRow } from "./edition.ts";
 
 export const REPORT_VERSION = promptVersion("report-period", "report-period-sections", "report-period-no-sections");
 
@@ -80,65 +80,87 @@ function windowPoint(at: Date): string {
   return `${Number(day.slice(5, 7))} 月 ${Number(day.slice(8, 10))} 日 ${beijingTime(at)}`;
 }
 
-/** A finished match's row in the results section: the scoreline itself, linked to the score board.
- * It is not a report, so it carries no item id — every reader of one treats a blank as "no detail
- * page", which is what a match row is: its link is the board's, in sourceUrl. */
-function matchEntry(m: ResultMatch): DailyEntry {
-  return {
-    itemId: ``,
-    factId: null,
-    storyPublicId: null,
-    title: `${m.league}${m.round ? ` ${m.round}` : ""}：${m.home} ${m.homeScore}-${m.awayScore} ${m.away}`,
-    summary: "",
-    sourceName: "直播吧比分",
-    sourceUrl: "https://www.188bifen.com/",
-    sourceId: "",
-    firstParty: false,
-    role: "比分",
-    score: null,
-    publishedAt: m.startAt.toISOString(),
-    sources: 1,
-  };
+/** A finished match's row in the results section: the scoreline, and under it the feeds' write-up
+ * of the match when they wrote one — its best report, which the row then links to as its detail
+ * page. Without one the row is the score alone, linked to the score board; it is not a report, so
+ * it carries no item id (every reader of one treats a blank as "no detail page"). */
+function matchEntry(m: ResultMatch, report: ReportRow | null): DailyEntry {
+  const line = `${m.league}${m.round ? ` ${m.round}` : ""}：${m.home} ${m.homeScore}-${m.awayScore} ${m.away}`;
+  // With a write-up the row's summary is the report's headline — that is where the scorers and the
+  // cards are, the database summary is not.
+  return report
+    ? { ...reportEntry(report), title: line, summary: report.title, sources: 1 }
+    : {
+      itemId: ``,
+      factId: null,
+      storyPublicId: null,
+      title: line,
+      summary: ``,
+      sourceName: "直播吧比分",
+      sourceUrl: "https://www.188bifen.com/",
+      sourceId: ``,
+      firstParty: false,
+      role: "比分",
+      score: null,
+      publishedAt: m.startAt.toISOString(),
+      sources: 1,
+    };
+}
+
+/** The feeds' best write-up of a match, if they wrote one: a result report, published since kickoff,
+ * whose headline names both sides in any of their spellings (TEAM_ALIASES). */
+function matchReport(m: ResultMatch, reports: readonly ReportRow[]): ReportRow | null {
+  const names = (title: string, aliases: readonly string[]) => aliases.some((a) => title.includes(a));
+  const home = TEAM_ALIASES[m.home] ?? [m.home];
+  const away = TEAM_ALIASES[m.away] ?? [m.away];
+  return reports.find((r) => r.timeline_at.getTime() >= m.startAt.getTime() && names(r.title, home) && names(r.title, away)) ?? null;
 }
 
 /**
- * The section's order over a score source's matches: a watched team's match first (either side,
- * substring-wise), then the whitelisted leagues in their listed order, latest kickoff first within a
- * rank. A match of neither is not the reader's result section: dropped.
+ * The section's order over a score source's matches, each with the write-up it found: a watched
+ * team's match first (either side, substring-wise), then the whitelisted leagues in their listed
+ * order, latest kickoff first within a rank. A match of neither is not the reader's result section,
+ * and neither is one the feeds wrote nothing about — the white-listed leagues carry small teams
+ * whose scorelines say nothing worth a row (rank 0, a watched team, is exempt: it is read for its
+ * own sake). Null write-up, watched or not, still shows the score alone.
  */
-function rankResultMatches(matches: readonly ResultMatch[], cfg: { teams: string[]; leagues: string[] }): ResultMatch[] {
+function rankResultMatches(matches: readonly ResultMatch[], reports: readonly ReportRow[], cfg: { teams: string[]; leagues: string[] }): Array<{ m: ResultMatch; r: ReportRow | null }> {
+  // A watched team is named as one of its sides' spellings (TEAM_ALIASES): "曼城" is in 曼彻斯特城's
+  // set, while no substring of "曼彻斯特城" ever spells "曼城".
+  const aliasesOf = (team: string) => TEAM_ALIASES[team] ?? [team];
+  const watched = (m: ResultMatch) => cfg.teams.some((t) => [...aliasesOf(m.home), ...aliasesOf(m.away)].includes(t));
   const rank = (m: ResultMatch): number => {
-    const teams = `${m.home}${m.away}`;
-    if (cfg.teams.some((t) => teams.includes(t))) return 0;
+    if (watched(m)) return 0;
     const league = cfg.leagues.indexOf(m.league);
     return league === -1 ? Number.POSITIVE_INFINITY : league + 1;
   };
-  return [...matches]
-    .map((m) => ({ m, r: rank(m) }))
-    .filter(({ r }) => Number.isFinite(r))
-    .sort((x, y) => x.r - y.r || y.m.startAt.getTime() - x.m.startAt.getTime())
-    .map(({ m }) => m);
+  return matches
+    .map((m) => ({ m, r: matchReport(m, reports), rank: rank(m) }))
+    .filter(({ rank }) => Number.isFinite(rank))
+    .filter(({ m, r }) => !!r || watched(m))
+    .sort((x, y) => x.rank - y.rank || y.m.startAt.getTime() - x.m.startAt.getTime());
 }
 
 /**
  * The industry's result section for a daily (RESULT_SECTION), or null when the industry has none or
  * nothing qualifies. With a score-source module installed (dailyResults) it is the window's finished
- * matches, one row each, ranked by the industry's watched teams and whitelisted leagues — match-day
- * feeds flood a report-flow section with mid-match flashes, so the section reads matches, not
- * reports. Without one it falls back to the window's unselected tagged results: one entry per fact,
- * best first, minus what the issue already carries (by report or by fact) and what recent issues
- * cited; a report that never grouped answers to no fact, so nothing vouches for it being a finished
- * match. Built after the arrangement so its items never compete for the main entries, and stored as
- * its own section so they stay out of the weekly/monthly candidates.
+ * matches, one row each, ranked by the industry's watched teams and whitelisted leagues and carrying
+ * the feeds' write-up of the match — match-day feeds flood a report-flow section with mid-match
+ * flashes, so the section reads matches, not reports. Without one it falls back to the window's
+ * unselected tagged results: one entry per fact, best first, minus what the issue already carries
+ * (by report or by fact) and what recent issues cited; a report that never grouped answers to no
+ * fact, so nothing vouches for it being a finished match. Built after the arrangement so its items
+ * never compete for the main entries, and stored as its own section so they stay out of the
+ * weekly/monthly candidates.
  */
 async function resultSection(date: string, start: Date, end: Date, issue: { main: EditionEntry[]; flashes: EditionEntry[] }): Promise<{ label: string; items: DailyEntry[] } | null> {
   const cfg = RESULT_SECTION;
   if (!cfg) return null;
   const feeder = dailyResults();
   if (feeder) {
-    const matches = await feeder.matches({ start, end });
+    const [matches, reports] = await Promise.all([feeder.matches({ start, end }), matchReports(start, end, cfg.category, cfg.tag, cfg.minScore)]);
     if (matches) {
-      const items = rankResultMatches(matches, cfg).slice(0, cfg.maxItems).map(matchEntry);
+      const items = rankResultMatches(matches, reports, cfg).slice(0, cfg.maxItems).map(({ m, r }) => matchEntry(m, r));
       return items.length ? { label: cfg.label, items } : null;
     }
   }

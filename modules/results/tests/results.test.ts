@@ -17,7 +17,7 @@ beforeEach(async () => {
 
 /** A feed row in the shape calibration confirmed: positions 0/1/3/5/6/13/27 are id/league/kickoff/teams/finished/round. */
 const row = (over: { id: number; league: number; kickoff: number; home: [number, string, number]; away: [number, string, number]; finished: number; round?: string }) => {
-  const m = Array.from({ length: 28 }, (_, i) => (i === 5 || i === 6 ? [] : 0));
+  const m: unknown[] = Array.from({ length: 28 }, (_, i) => (i === 5 || i === 6 ? [] : 0));
   m[0] = over.id;
   m[1] = over.league;
   m[3] = over.kickoff;
