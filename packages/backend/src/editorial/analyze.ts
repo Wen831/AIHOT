@@ -477,10 +477,9 @@ export function scoresSelect(scores: AnalysisRun["scores"], threshold = scores?.
 /** Runs the steps on the material as it is (or reuses their receipts) without writing business results. */
 export async function runAnalysis(a: AnalyzeInputArticle, opts: StepOpts = {}): Promise<AnalysisRun> {
   checkAnalysisRunning();
-  // Missing article text waits for a later revision, before any paid step; displayable original posts keep their judgement.
-  if (awaitsMaterial(a)) return { prefilter: null, scores: null, writing: null, structure: null };
-  // A module's local guard sees the material first: what it blocks never reaches a model, so a
-  // provider's content filter cannot turn it into "failed" retries (receiptId 0: no paid request).
+  // A module's local guard sees the material first, even when more of it may still come: what it
+  // blocks never reaches a model, so a provider's content filter cannot turn it into "failed"
+  // retries (receiptId 0: no paid request).
   const guard = localGuard();
   if (guard) {
     const reason = guard.screen({ title: a.title ?? "", summary: a.excerpt ?? "", body: a.bodyText ?? "" });
@@ -488,6 +487,8 @@ export async function runAnalysis(a: AnalyzeInputArticle, opts: StepOpts = {}): 
       return { prefilter: { label: "BLOCK", reason, model: "local-guard", receiptId: 0, reused: true }, scores: null, writing: null, structure: null };
     }
   }
+  // Missing article text waits for a later revision, before any paid step; displayable original posts keep their judgement.
+  if (awaitsMaterial(a)) return { prefilter: null, scores: null, writing: null, structure: null };
   let prefilter: AnalysisRun["prefilter"];
   try {
     prefilter = await runSelectionPrefilter(a, opts);

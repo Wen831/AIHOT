@@ -53,10 +53,10 @@ function toDate(v: unknown, unit: string | undefined, utcOffset: string | undefi
     return Number.isFinite(date.getTime()) ? { publishedAt: date, publicationTime: date.toISOString() } : unknown;
   }
   if (unit === "utc8") {
-    // A wall-clock time without a zone (cctv "2026-10-03 15:52:02") is Beijing time.
-    const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?$/.exec(text);
-    const d = m ? new Date(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6] ?? "00"}+08:00`) : null;
-    return d && Number.isFinite(d.getTime()) ? { publishedAt: d, publicationTime: d.toISOString() } : unknown;
+    // A wall-clock time without a zone (cctv "2026-10-03 15:52:02") is Beijing time: read at that
+    // offset whatever shape the value prints (contracts/time.ts owns zone arithmetic, not here).
+    const date = readPublicationDate(text, "+08:00");
+    return date.publishedAt && date.publicationTime ? date : unknown;
   }
   if (unit === "yyyymmdd") {
     const m = /^(\d{4})(\d{2})(\d{2})$/.exec(text);

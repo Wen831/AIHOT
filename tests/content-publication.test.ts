@@ -76,13 +76,13 @@ test("source tier and event ownership are separate; mentions of an entity do not
   for (const subject of [null, "Databricks", "Real Madrid合作伙伴", "Sam Altman (@sama)"]) {
     assert.equal(representativePriority({ ...org, fact_subject: subject }), 3, String(subject));
   }
-  assert.equal(representativePriority({ ...org, fact_subject: "ChatGPT" }), 1, "exact configured product alias");
-  assert.equal(representativePriority({ ...org, fact_subject: "Real Madrid / Anthropic" }), 1, "explicit co-subject list");
-  assert.equal(representativePriority({ ...org, owner_entity_id: "qwen", fact_subject: "Qwen Team" }), 1, "the company under another of its own names");
-  assert.equal(representativePriority({ ...org, owner_entity_id: "world-labs", fact_subject: "AMD + World Labs" }), 1);
-  assert.equal(representativePriority({ ...org, owner_entity_id: "xai", fact_subject: "SpaceXSI" }), 1, "xAI after its rename to SpaceX Super Intelligence");
-  assert.equal(representativePriority({ ...org, owner_entity_id: "xai", fact_subject: "Grok Bot" }), 1, "xAI's agent product");
-  assert.equal(representativePriority({ ...org, owner_entity_id: "meta", fact_subject: "Muse" }), 1, "Meta's agent product");
+  assert.equal(representativePriority({ ...org, fact_subject: "皇马" }), 1, "exact configured club alias");
+  assert.equal(representativePriority({ ...org, fact_subject: "Real Madrid / Liverpool" }), 1, "explicit co-subject list");
+  assert.equal(representativePriority({ ...org, owner_entity_id: "barcelona", fact_subject: "FC Barcelona" }), 1, "the club under another of its own names");
+  assert.equal(representativePriority({ ...org, owner_entity_id: "man-city", fact_subject: "曼联 + 曼城" }), 1);
+  assert.equal(representativePriority({ ...org, owner_entity_id: "liverpool", fact_subject: "红军" }), 1, "a club named by two of its aliases in one phrase");
+  assert.equal(representativePriority({ ...org, owner_entity_id: "real-madrid", fact_subject: "皇家马德里" }), 1, "the club's own channel name");
+  assert.equal(representativePriority({ ...org, owner_entity_id: "man-utd", fact_subject: "红魔" }), 1, "a club's nickname alias");
   assert.equal(representativePriority({ ...org, fact_subject: "Real Madrid + " }), 3, "incomplete subject list is not evidence");
   assert.equal(representativePriority({ ...org, owner_entity_id: null }), 3);
   assert.equal(representativePriority({ ...org, owner_entity_id: "unregistered-org", fact_subject: "unregistered-org" }), 3, "equal unknown strings are not verified identity");
