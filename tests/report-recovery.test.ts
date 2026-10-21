@@ -4,6 +4,7 @@ import { editionAt, stub, tag } from "./setup.ts";
 import assert from "node:assert/strict";
 import { after, before, beforeEach, test } from "node:test";
 import { closeDb, sql } from "@aihot/backend/db";
+import { addDays } from "@aihot/contracts/time";
 import { stopBoss } from "@aihot/backend/jobs/queue";
 import { composeDaily, composeDueReports, composeWeekly, composeMonthly } from "@aihot/backend/reports/compose";
 
@@ -35,6 +36,19 @@ async function item(date: string) {
   return id;
 }
 const report = async (kind: string, key: string) => (await sql`SELECT content, revision, generated_at FROM reports WHERE kind = ${kind} AND key = ${key}`)[0];
+
+async function daily(date: string, id?: string) {
+  const sections = id ? [{ label: "国内时政", items: [{ itemId: id, title: id }] }] : [];
+  await sql`INSERT INTO reports (kind, key, window_start, window_end, content, generated_at)
+    VALUES ('daily', ${date}, now(), now(), ${sql.json({ date, sections })}, now())
+    ON CONFLICT (kind, key) DO UPDATE SET content = EXCLUDED.content`;
+}
+
+async function dailies(start: string, end: string, withItems: string[] = []) {
+  for (let date = start; date <= end; date = addDays(date, 1)) {
+    await daily(date, withItems.includes(date) ? await item(date) : undefined);
+  }
+}
 
 test("automatic retries preserve all three published issue kinds; explicit corrections keep a revision", async () => {
   const id = await item("2024-02-02");
@@ -87,39 +101,108 @@ test("empty older gaps cannot starve a later daily, weekly or monthly, and failu
   }
 });
 
-// An issue older than the data's first day never compiles and is skipped outright (an import brings it
-// back); an issue inside the data range that fails gets a doubling pause per failure and is given up
+test("a week or month that ended before the first daily is not due, so a site started mid-month runs clean", async () => {
+  // The site's first daily is Monday 2024-02-05: the weeks and the month 2024-01 before it have no daily to sum up.
+  const first = await item("2024-02-05");
+  await sql`INSERT INTO reports (kind, key, window_start, window_end, content, generated_at)
+    VALUES ('daily', '2024-02-05', now(), now(), ${sql.json({ sections: [{ label: "国内时政", items: [{ itemId: first, title: first }] }] })}, now())`;
+  const { generated, failed } = await composeDueReports(editionAt("daily", "2024-02-05", 3600));
+  assert.deepEqual([generated, failed], [[], []]);
+  assert.equal(await report("weekly", "2024-W05"), undefined);
+  assert.equal(await report("monthly", "2024-01"), undefined);
+});
+
+test("a complete quiet week is skipped on later runs without using the issue limit, and a corrected daily can fill it", async () => {
+  await dailies("2024-01-29", "2024-03-04", ["2024-01-30", "2024-02-14", "2024-02-21", "2024-02-28"]);
+  await composeDueReports(editionAt("weekly", "2024-02-05", 60));
+  const next = await composeDueReports(editionAt("weekly", "2024-02-19", 60), 1);
+  assert.deepEqual(next, { generated: ["weekly:2024-W07"], failed: [] });
+  const calls = provider.hits();
+  assert.deepEqual(await composeDueReports(editionAt("weekly", "2024-02-19", 1800)), { generated: [], failed: [] });
+  assert.equal(provider.hits(), calls, "retrying a quiet week makes no model request");
+  const later = await composeDueReports(editionAt("weekly", "2024-03-04", 60));
+  assert.deepEqual(later, { generated: ["weekly:2024-W08", "weekly:2024-W09", "monthly:2024-02"], failed: [] });
+  assert.equal(await report("weekly", "2024-W06"), undefined, "a quiet period has no published issue");
+
+  await daily("2024-02-08", await item("2024-02-08"));
+  assert.deepEqual(await composeDueReports(editionAt("weekly", "2024-03-04", 1800)), { generated: ["weekly:2024-W06"], failed: [] });
+  assert.ok(await report("weekly", "2024-W06"), "a skipped period is reconsidered from the current dailies");
+});
+
+test("a complete quiet month stays successful across retries and does not starve the next month", async () => {
+  await dailies("2024-01-01", "2024-04-01", ["2024-01-02", "2024-03-02"]);
+  await composeMonthly("2024-01");
+  const calls = provider.hits();
+  for (const seconds of [60, 1800]) {
+    assert.deepEqual(await composeDueReports(editionAt("monthly", "2024-03-01", seconds), 1), { generated: [], failed: [] });
+  }
+  assert.equal(await composeMonthly("2024-02"), null);
+  assert.equal(await report("monthly", "2024-02"), undefined);
+  assert.equal(provider.hits(), calls);
+  assert.deepEqual(await composeDueReports(editionAt("monthly", "2024-04-01", 60), 1), { generated: ["monthly:2024-03"], failed: [] });
+});
+
+for (const [kind, key, start, end, compose] of [
+  ["weekly", "2024-W06", "2024-02-05", "2024-02-11", composeWeekly],
+  ["monthly", "2024-02", "2024-02-01", "2024-02-29", composeMonthly],
+] as const) {
+  test(`a ${kind} with a missing daily still fails instead of appearing quiet`, async () => {
+    await assert.rejects(compose(key), /no daily entries/);
+    await dailies(start, end);
+    await sql`DELETE FROM reports WHERE kind = 'daily' AND key = '2024-02-08'`;
+    const calls = provider.hits();
+    await assert.rejects(compose(key), /no daily entries/);
+    assert.equal(await report(kind, key), undefined);
+    assert.equal(provider.hits(), calls);
+  });
+
+  test(`a ${kind} whose daily entries were withdrawn is not mistaken for an originally quiet period`, async () => {
+    await dailies(start, end);
+    const id = await item("2024-02-08");
+    await daily("2024-02-08", id);
+    await sql`UPDATE publications SET visibility = 'withdrawn' WHERE article_id = ${id}`;
+    const calls = provider.hits();
+    await assert.rejects(compose(key), /no daily entries/);
+    assert.equal(await report(kind, key), undefined);
+    assert.equal(provider.hits(), calls);
+  });
+
+  test(`an explicit ${kind} correction with no entries fails and preserves the published issue`, async () => {
+    await dailies(start, end, ["2024-02-08"]);
+    await compose(key);
+    const saved = await report(kind, key);
+    const calls = provider.hits();
+    await daily("2024-02-08");
+    await assert.rejects(compose(key, "editor correction"), /no daily entries/);
+    await compose(key);
+    assert.deepEqual(await report(kind, key), saved);
+    assert.equal((await sql`SELECT 1 FROM report_revisions v JOIN reports r ON r.id = v.report_id WHERE r.kind = ${kind} AND r.key = ${key}`).length, 0);
+    assert.equal(provider.hits(), calls);
+  });
+}
+
+test("quiet first periods start at the site's first daily, while later missing days still fail", async () => {
+  await dailies("2024-02-07", "2024-02-29");
+  const calls = provider.hits();
+  assert.equal(await composeWeekly("2024-W06"), null);
+  assert.equal(await composeMonthly("2024-02"), null);
+  assert.equal(provider.hits(), calls);
+  await sql`DELETE FROM reports WHERE kind = 'daily' AND key = '2024-02-08'`;
+  await assert.rejects(composeWeekly("2024-W06"), /no daily entries/);
+  await assert.rejects(composeMonthly("2024-02"), /no daily entries/);
+});
+
+// An issue inside the data range that fails gets a doubling pause per failure and is given up
 // after six tries — settings holds the counter, the message no longer carries the given-up issue.
-test("issues before the data are skipped, an in-range failure backs off and is given up after six", async () => {
+test("an in-range failure backs off per failure and is given up after six", async () => {
   const clear = async () => sql`DELETE FROM settings WHERE key = 'reports.compose.failures'`;
-  const monthlyRow = (key: string) => sql`INSERT INTO reports (kind, key, window_start, window_end, content, generated_at)
-    VALUES ('monthly', ${key}, now(), now(), ${sql.json({})}, now())`;
   await clear();
   try {
-    // Data starts 2024-03-05; an older published monthly (2024-01) pulls the loop over the skipped gap.
-    await item("2024-03-05");
-    await monthlyRow("2024-01");
-    await assert.rejects(composeDueReports(new Date("2024-05-02T03:00:00Z")), (e: Error) => {
-      assert.match(e.message, /monthly:2024-04/);
-      assert.doesNotMatch(e.message, /monthly:2024-02/);
-      return true;
-    }, "the month before the data is skipped, not failed");
-    assert.ok(!(await sql`SELECT 1 FROM settings WHERE key = 'reports.compose.failures' AND value ? 'monthly:2024-02'`).length, "a skipped issue leaves no failure mark");
-    // A daily appearing in February moves the data day back: the skipped issue returns and compiles.
-    const feb = await item("2024-02-15");
+    // A first daily early in March makes the empty April monthly due; it compiles from dailies and
+    // holds none, so it fails and waits out a doubling pause per failure.
+    const early = await item("2024-03-05");
     await sql`INSERT INTO reports (kind, key, window_start, window_end, content, generated_at)
-      VALUES ('daily', '2024-02-15', now(), now(), ${sql.json({ sections: [{ label: "国内时政", items: [{ itemId: feb, title: feb }] }] })}, now())`;
-    await clear();
-    // The run still fails on the many empty dailies; the message carries both lists.
-    const message = await composeDueReports(new Date("2024-05-02T03:00:00Z")).then(
-      () => "",
-      (e: Error) => e.message,
-    );
-    assert.match(message.split(" failed; ")[1] ?? "", /monthly:2024-02/);
-    assert.doesNotMatch(message.split(" failed; ")[0], /monthly:2024-01/);
-    await clear();
-    // The due month 2024-04 holds no dailies: it fails, waits out a doubling pause per failure, and is
-    // given up after the sixth attempt (the message stops carrying it, settings keeps the counter).
+      VALUES ('daily', '2024-03-05', now(), now(), ${sql.json({ sections: [{ label: "国内时政", items: [{ itemId: early, title: early }] }] })}, now())`;
     await assert.rejects(composeDueReports(new Date("2024-05-02T03:00:00Z")), /monthly:2024-04/);
     // Backoff: a minute later every pause is still elapsing — nothing is retried and nothing failed
     // again; each elapsed pause buys one more try; the sixth failure gives the issue up.
@@ -141,7 +224,6 @@ test("issues before the data are skipped, an in-range failure backs off and is g
       (e: Error) => e.message,
     );
     assert.doesNotMatch(outcome, /monthly:2024-04/);
-    assert.doesNotMatch(outcome, /daily:2024-05-02/);
     const [mark] = await sql`SELECT (value->'monthly:2024-04'->>'count')::int AS count FROM settings WHERE key = 'reports.compose.failures'`;
     assert.equal(mark!.count, 6);
   } finally {

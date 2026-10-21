@@ -76,10 +76,13 @@ test("source tier and event ownership are separate; mentions of an entity do not
   for (const subject of [null, "Databricks", "Real Madrid合作伙伴", "Sam Altman (@sama)"]) {
     assert.equal(representativePriority({ ...org, fact_subject: subject }), 3, String(subject));
   }
-  assert.equal(representativePriority({ ...org, fact_subject: "Real Madrid" }), 1, "exact configured product alias");
-  assert.equal(representativePriority({ ...org, fact_subject: "Real Madrid / Barcelona" }), 1, "explicit co-subject list");
-  assert.equal(representativePriority({ ...org, owner_entity_id: "man-city", fact_subject: "曼城" }), 1, "the company under another of its own names");
-  assert.equal(representativePriority({ ...org, owner_entity_id: "arsenal", fact_subject: "Arsenal + Liverpool" }), 1);
+  assert.equal(representativePriority({ ...org, fact_subject: "ChatGPT" }), 1, "exact configured product alias");
+  assert.equal(representativePriority({ ...org, fact_subject: "Real Madrid / Anthropic" }), 1, "explicit co-subject list");
+  assert.equal(representativePriority({ ...org, owner_entity_id: "qwen", fact_subject: "Qwen Team" }), 1, "the company under another of its own names");
+  assert.equal(representativePriority({ ...org, owner_entity_id: "world-labs", fact_subject: "AMD + World Labs" }), 1);
+  assert.equal(representativePriority({ ...org, owner_entity_id: "xai", fact_subject: "SpaceXSI" }), 1, "xAI after its rename to SpaceX Super Intelligence");
+  assert.equal(representativePriority({ ...org, owner_entity_id: "xai", fact_subject: "Grok Bot" }), 1, "xAI's agent product");
+  assert.equal(representativePriority({ ...org, owner_entity_id: "meta", fact_subject: "Muse" }), 1, "Meta's agent product");
   assert.equal(representativePriority({ ...org, fact_subject: "Real Madrid + " }), 3, "incomplete subject list is not evidence");
   assert.equal(representativePriority({ ...org, owner_entity_id: null }), 3);
   assert.equal(representativePriority({ ...org, owner_entity_id: "unregistered-org", fact_subject: "unregistered-org" }), 3, "equal unknown strings are not verified identity");
@@ -342,7 +345,7 @@ test("the hot board shows an event under its own title, linked to the fact most 
   const g = await story("Real Madrid 发布 Dots");
   const fact = async (title: string) => Number((await sql`INSERT INTO facts (public_id,story_id,title,subject) VALUES (${`f-${randomUUID()}`},${g.storyId},${title},'Real Madrid') RETURNING id`)[0]!.id);
   // A leak opens the story and a single follow-up scores highest; the launch is what two sources report.
-  const leak = await report(s, { ...g, factId: await fact("OpenAI 常驻助手曝光") }, { title: "发布前的爆料", hours: 30, score: 99 });
+  const leak = await report(s, { ...g, factId: await fact("Real Madrid 常驻助手曝光") }, { title: "发布前的爆料", hours: 30, score: 99 });
   const media = await report(s, g, { title: "Dots 媒体报道", hours: 4, score: 90 });
   const blog = await report(official, g, { title: "Dots 官网发布", hours: 3, score: 60 });
   const followUp = await report(other, { ...g, factId: await fact("ChatGPT Space 新进展") }, { title: "Space 高分报道", hours: 2, score: 99 });

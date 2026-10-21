@@ -7,20 +7,21 @@
  * section 是日报里的分节标题（几个类别可以共用一节，按这里的顺序排）；guide 告诉结构抽取模型这一类收什么、
  * 和相邻类别的边界在哪（总的归类原则写在 prompts/structure.md 里）。
  * commentary 标出评论类（教程、观点）：日报写过的事又有评论类的后续报道，只占一行快讯（报道它的信源够多时除外）。
+ * tagColor 是飞书推送卡片里跟在标题后面的这一类小标签的颜色（飞书 text_tag 的颜色名）。
  * 没归上类的资料在日报里放进第一个 key 为 industry 的类别所在的节（没有就放最后一节）。国内五类排在前、足球四类排在后，页面与日报共用这个顺序。
  */
 export const CATEGORIES = [
-  { key: "china-politics", label: "时政", section: "国内时政", guide: "国内重大政策出台与调整、法律法规、人事任命、中国外交、台海与港澳事务；涉华国际新闻（中外关系、涉华国际会议与谈判、外国对华政策、台海相关军事动态）也归此类。不涉华的外国政局、战争军事、地缘博弈与国际事件一律归国际，不进此类" },
-  { key: "china-society", label: "社会", section: "社会民生", guide: "社会热点事件、民生政策（教育、医疗、养老、就业）、公共安全、自然灾害与天气、舆论关注的社会现象" },
-  { key: "finance", label: "财经", section: "财经商业", guide: "宏观经济数据与政策、股市债市汇市、公司重大经营与资本动态（上市、并购、暴雷）、行业走向、房地产；国际宏观经济与市场大事也归此类" },
-  { key: "tech", label: "科技", section: "科技数码", guide: "科技行业与公司动态、芯片、互联网、通信、航天、新能源车、消费数码产品发布（人工智能行业内容除外）" },
-  { key: "international", label: "国际", section: "国际视野", guide: "不直接涉及中国的国际新闻：外国政局与大选、战争与军事冲突、大国博弈与地缘政治、重大国际事件与国际组织动态、外国重大社会事件" },
-  { key: "match", label: "比赛", section: "比赛与赛果", guide: "已结束比赛的比分、关键战报、大冷门、破纪录表现与比赛过程关键事件（进球、红牌、伤退、争议判罚瞬间），俱乐部赛事与国字号赛事同此；赛前备战、首发与伤停预测、赛前发布会也归此类。以规则修改、判罚处罚、VAR/裁判争议、联赛政策或复盘与观点评论为题的报道不进此类——按涉事主体归俱乐部，国字号相关归国家队" },
-  { key: "club", label: "俱乐部", section: "俱乐部与国家队", guide: "俱乐部经营、人事、财政、收购、队内动态；针对俱乐部的判罚处罚、VAR/裁判争议与涉俱乐部的规则变化；围绕俱乐部及其比赛的复盘、战术解读、观点评论与深度访谈；足球产业与治理、联赛规则政策、转播与商业动态归此类" },
-  { key: "national", label: "国家队", section: "俱乐部与国家队", guide: "国家队大名单、大赛征程、国字号球队动态、国际比赛日；针对国字号的判罚处罚与规则变化、围绕国字号比赛的复盘与观点评论也归此类；国字号比赛的赛果与赛前备战归比赛类" },
-  { key: "transfer", label: "转会", section: "转会窗", guide: "转会官宣、达成协议、租借、续约、解约，以及有实质进展的转会传闻" },
-  { key: "github", label: "GitHub", section: "GitHub 热门项目", guide: "仅由 GitHub showcase 专用通道入库的开源项目条目；新闻资料一律不归此类，按其内容归对应新闻类别" },
-] as const satisfies ReadonlyArray<{ key: string; label: string; feedLabel?: string; section: string; guide: string; commentary?: true }>;
+  { key: "china-politics", tagColor: "red", label: "时政", section: "国内时政", guide: "国内重大政策出台与调整、法律法规、人事任命、中国外交、台海与港澳事务；涉华国际新闻（中外关系、涉华国际会议与谈判、外国对华政策、台海相关军事动态）也归此类。不涉华的外国政局、战争军事、地缘博弈与国际事件一律归国际，不进此类" },
+  { key: "china-society", tagColor: "orange", label: "社会", section: "社会民生", guide: "社会热点事件、民生政策（教育、医疗、养老、就业）、公共安全、自然灾害与天气、舆论关注的社会现象" },
+  { key: "finance", tagColor: "yellow", label: "财经", section: "财经商业", guide: "宏观经济数据与政策、股市债市汇市、公司重大经营与资本动态（上市、并购、暴雷）、行业走向、房地产；国际宏观经济与市场大事也归此类" },
+  { key: "tech", tagColor: "blue", label: "科技", section: "科技数码", guide: "科技行业与公司动态、芯片、互联网、通信、航天、新能源车、消费数码产品发布（人工智能行业内容除外）" },
+  { key: "international", tagColor: "purple", label: "国际", section: "国际视野", guide: "不直接涉及中国的国际新闻：外国政局与大选、战争与军事冲突、大国博弈与地缘政治、重大国际事件与国际组织动态、外国重大社会事件" },
+  { key: "match", tagColor: "green", label: "比赛", section: "比赛与赛果", guide: "已结束比赛的比分、关键战报、大冷门、破纪录表现与比赛过程关键事件（进球、红牌、伤退、争议判罚瞬间），俱乐部赛事与国字号赛事同此；赛前备战、首发与伤停预测、赛前发布会也归此类。以规则修改、判罚处罚、VAR/裁判争议、联赛政策或复盘与观点评论为题的报道不进此类——按涉事主体归俱乐部，国字号相关归国家队" },
+  { key: "club", tagColor: "turquoise", label: "俱乐部", section: "俱乐部与国家队", guide: "俱乐部经营、人事、财政、收购、队内动态；针对俱乐部的判罚处罚、VAR/裁判争议与涉俱乐部的规则变化；围绕俱乐部及其比赛的复盘、战术解读、观点评论与深度访谈；足球产业与治理、联赛规则政策、转播与商业动态归此类" },
+  { key: "national", tagColor: "indigo", label: "国家队", section: "俱乐部与国家队", guide: "国家队大名单、大赛征程、国字号球队动态、国际比赛日；针对国字号的判罚处罚与规则变化、围绕国字号比赛的复盘与观点评论也归此类；国字号比赛的赛果与赛前备战归比赛类" },
+  { key: "transfer", tagColor: "wisteria", label: "转会", section: "转会窗", guide: "转会官宣、达成协议、租借、续约、解约，以及有实质进展的转会传闻" },
+  { key: "github", tagColor: "violet", label: "GitHub", section: "GitHub 热门项目", guide: "仅由 GitHub showcase 专用通道入库的开源项目条目；新闻资料一律不归此类，按其内容归对应新闻类别" },
+] as const satisfies ReadonlyArray<{ key: string; tagColor: string; label: string; feedLabel?: string; section: string; guide: string; commentary?: true }>;
 
 /**
  * 这个行业最受关注的一类发布（AI 行业是新模型）：日报报头的“N 个新模型”、改分类后修订已出的报告、
@@ -128,7 +129,7 @@ export const CATEGORY_BY_ITEM_TYPE: Readonly<Record<string, string>> = {
  * aliases 给结构抽取模型看；otherNames 是主体自己的其他称呼（官方账号名、子品牌），
  * 把事实的主体对到发布方时也认它们。
  */
-export const ENTITIES: Record<string, { name: string; displayTag: string | null; aliases: string[]; otherNames?: string[] }> = {
+export const ENTITIES: Record<string, { name: string; displayTag: string | null; aliases: string[]; orgNames?: string[]; otherNames?: string[] }> = {
   "real-madrid": { name: "皇家马德里", displayTag: "皇马", aliases: ["皇马", "皇家马德里", "Real Madrid"] },
   barcelona: { name: "巴塞罗那", displayTag: "巴塞罗那", aliases: ["巴萨", "巴塞罗那", "FC Barcelona"] },
   "atletico-madrid": { name: "马德里竞技", displayTag: "马德里竞技", aliases: ["马竞", "马德里竞技", "Atletico"] },

@@ -12,6 +12,16 @@ import type { Finding } from "./notify/feishu.ts";
 import type { Topic, TopicMember } from "./publication/topics.ts";
 import type { Candidate } from "./sources/types.ts";
 
+/** A cron schedule (Asia/Shanghai), recorded in job_runs like the engine's (apps/worker/src/schedules.ts). */
+export interface Scheduled {
+  name: string;
+  cron: string;
+  run: () => Promise<unknown>;
+  missed?: "skip" | "once";
+  /** Read when the worker starts, after the modules are installed: false removes the schedule and its execution queue; run history remains. */
+  when?: () => boolean;
+}
+
 /**
  * A participation mode a module owns (a display-only channel such as a daily trending feed): its
  * sources' items are not judged the editorial way — the module shapes the listing, writes the copy
@@ -71,31 +81,6 @@ export interface ResultMatch {
  */
 export interface DailyResults {
   matches: (window: { start: Date; end: Date }) => Promise<ResultMatch[] | null>;
-}
-
-/** A cron schedule (Asia/Shanghai), recorded in job_runs like the engine's (apps/worker/src/schedules.ts). */
-export interface Scheduled {
-  name: string;
-  cron: string;
-  run: () => Promise<unknown>;
-  missed?: "skip" | "once";
-  /** Read when the worker starts, after the modules are installed: false removes the schedule and its execution queue; run history remains. */
-  when?: () => boolean;
-}
-
-/**
- * A module's notification routing policy (ServerModule.responder):
- * the owner hears only what it hands back; held findings do not imply recovery.
- */
-export interface Responder {
-  /**
-   * Every problem the alerts check found (operations/alerts.ts); a problem it held that is missing has ended.
-   * `tell` is what the owner should hear about now; `held` names the problems still open, so the owner is not
-   * told that something they heard about earlier has ended while it lasts.
-   */
-  take: (found: Finding[], now: number) => Promise<{ tell: Finding[]; held: string[] }>;
-  /** A problem found while the alerts check cannot run (operations/watch.ts: the worker is down); what the owner should hear about it, if anything. */
-  raise: (found: Finding, now: number) => Promise<Finding | null>;
 }
 
 /** A model step (editorial/models.ts); its default model comes from site/models.ts, else `default`. */
@@ -176,6 +161,8 @@ export function defineQueue<T>(queue: ModuleQueue<T>): ModuleQueue<T> {
 
 export interface SitemapEntry {
   loc: string;
+  /** Stable public-content identity for update notifications; never rendered into the sitemap. */
+  revision?: string;
   lastmod?: Date | null;
   changefreq?: string;
   priority?: number;
@@ -257,6 +244,8 @@ export interface RequestNotices {
 export interface ServerModule {
   /** Its folder under modules/. */
   name: string;
+  /** Sources whose selected articles keep independent cards/seats without changing admission or event identity (publication/rules.ts, scope.ts). */
+  independentSelectedSources?: readonly string[];
   /** Its HTTP routes, and hooks on the app such as what to flush when it closes, registered before the engine's v1 fallbacks (apps/api/src/app.ts). */
   http?: (app: FastifyInstance) => void;
   agent?: {
@@ -268,12 +257,12 @@ export interface ServerModule {
   };
   llms?: () => Promise<LlmsLines> | LlmsLines;
   sitemap?: {
-    /** After the engine's content pages (the topics), before the site's own (agent, about, terms). */
-    pages?: SitemapEntry[];
     /** After the stories. */
     entries?: () => Promise<SitemapEntry[]>;
   };
   admin?: {
+    /** Current jobs scheduled outside the worker, by their job_runs name (admin/runs.ts). */
+    currentJobs?: () => Promise<readonly string[]>;
     /** Badges on the admin navigation, by the key its web items name (admin/navigation.ts). */
     counts?: Record<string, () => Promise<number>>;
     /** Its part of the admin's runs page, under its name (admin/runs.ts); its web module draws it. */
@@ -282,16 +271,14 @@ export interface ServerModule {
   models?: Record<string, ModelStep>;
   /** A score source for the daily's result section, when the module has one. */
   dailyResults?: DailyResults;
+  /** Participation modes the module owns, by mode name. */
+  participationModes?: Record<string, ParticipationMode>;
+  /** The module's local guard over the material before the analysis steps. */
+  localGuard?: LocalGuard;
   /** Cron schedules (the worker). */
   schedules?: Scheduled[];
   /** What is wrong now, for the owner's alerts (operations/alerts.ts), after the engine's problems. */
   alerts?: (now: number) => Promise<Finding[]>;
-  /**
-   * Chooses which problems the owner hears about: the first installed module with one (operations/alerts.ts,
-   * operations/watch.ts). What it holds back is the module's to hand to whoever handles it; with one, the
-   * daily digest and the weekly source report have no schedule (apps/worker/src/schedules.ts).
-   */
-  responder?: Responder;
   /** Its share of the daily retention run (operations/retention.ts): what it deleted or aggregated. */
   retention?: (now: Date) => Promise<Record<string, unknown>>;
   on?: Partial<EngineHooks>;
@@ -324,10 +311,6 @@ export interface ServerModule {
     resumed?: (sourceId: string, tx: Db) => Promise<void>;
     fetchNow?: (source: { id: string; config: Record<string, unknown> }) => Promise<Record<string, unknown>>;
   }>;
-  /** Participation modes the module owns, by mode name (sources/participation.ts for the modes themselves). */
-  participationModes?: Record<string, ParticipationMode>;
-  /** The first installed module's local guard over the material before the analysis steps. */
-  localGuard?: LocalGuard;
   /** Lines of the Monday source-health report (operations/reports.ts), after the source counts. */
   sourceHealth?: (now: number) => Promise<string[]>;
   /** Job queues of its own (jobs/queue.ts). */
@@ -357,11 +340,6 @@ export function installModules(modules: readonly ServerModule[]): void {
 
 export function serverModules(): readonly ServerModule[] {
   return installed;
-}
-
-/** The first installed module's responder, if any. */
-export function responder(): Responder | null {
-  return installed.find((m) => m.responder)?.responder ?? null;
 }
 
 /** The first installed module's socket for a participation mode, if any (engine checks that assume

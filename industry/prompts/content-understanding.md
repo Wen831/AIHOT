@@ -22,7 +22,7 @@
 - `business_finance`：宏观经济数据与政策、金融市场、公司经营与资本动态、行业走向
 - `tech_update`：科技公司与行业动态、产品发布、技术进展（AI 行业内容除外）
 
-优先级：官宣或达成协议的转会选 transfer_deal；已结束的比赛选 match_result；帅位变动选 coaching_move；伤停处罚选 injury_suspension；规则/财政/经营类选 governance_event；评论与深度分析选 opinion_analysis。国内新闻：政策、人事、外交、监管选 policy_news；社会事件与民生议题选 social_event；宏观经济、金融、公司资本动态选 business_finance；科技行业与产品选 tech_update。
+优先级：官宣或达成协议的转会选 transfer_deal；已结束的比赛选 match_result；帅位变动选 coaching_move；伤停处罚选 injury_suspension；规则/财政/经营类选 governance_event；评论与深度分析选 opinion_analysis。原文把官宣、签约或比赛结果写成过去的事、本条在讲回顾、集锦或用法演示时，不算本次官宣或赛果，选对应的评论与深度分析或赛前动态类。国内新闻：政策、人事、外交、监管选 policy_news；社会事件与民生议题选 social_event；宏观经济、金融、公司资本动态选 business_finance；科技行业与产品选 tech_update。
 
 输出前检查 `itemType` 与第一个分类标签是否自洽：`transfer_deal` 对应“转会官宣”或“转会传闻”，`match_result` 对应“比赛赛果”，`coaching_move` 对应“教练变动”，`injury_suspension` 对应“伤病停赛”，`governance_event` 对应“规则/判罚”、“财政/收购”或“足球产业”，`opinion_analysis` 对应“深度/观点”，`misc_update` 对应“赛前动态”或“其他”，`policy_news` 对应“时政要闻”，`social_event` 对应“社会热点”，`business_finance` 对应“财经商业”，`tech_update` 对应“科技数码”。如果二者冲突，按当前材料的核心事件修正后再输出。
 

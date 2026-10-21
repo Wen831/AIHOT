@@ -5,9 +5,9 @@ import { Form, Link, useNavigation, useSearchParams } from "react-router";
 import { CATEGORY_KEYS, CATEGORY_LABELS, CHANNEL_LABELS, isFootballCategory, type CategoryKey, type ChannelKey } from "@aihot/contracts/taxonomy";
 import { RESULT_SECTION } from "@aihot/industry/taxonomy";
 import { SITE } from "@aihot/site";
-import { IconCheck, IconClose, IconFilter, IconSearch } from "../../components/icons";
+import { IconClose, IconFilter, IconSearch } from "../../components/icons";
 import { PillTabs } from "../../components/ui/Tabs";
-import { Sheet } from "../../components/ui/Sheet";
+import { ChoiceTick, Sheet, sheetChoice } from "../../components/ui/Sheet";
 import { Wordmark } from "@aihot/site/brand/Logo.tsx";
 import { BarButton, PhoneBar } from "../../components/shell/PhoneBar";
 import { openSearch } from "../search/SearchOverlay";
@@ -60,7 +60,7 @@ function filterKey(category: CategoryKey | null, channel: ChannelKey, tag: strin
 /** Desktop: the filter as a row of tabs beside the search field. */
 export function CategoryTabs({ base, category, channel = "all", tag = null, layoutId, className = "" }: { base: string; category: CategoryKey | null; channel?: ChannelKey; tag?: string | null; layoutId: string; className?: string }) {
   const [params] = useSearchParams();
-  return <PillTabs items={filterOptions(base, params, "全部").map(o => ({ ...o, prefetch: 'intent' as const }))} active={filterKey(category, channel, tag)} layoutId={layoutId} label="筛选" className={className} />;
+  return <PillTabs items={filterOptions(base, params, "全部").map(o => ({ ...o, prefetchOnPress: true }))} active={filterKey(category, channel, tag)} layoutId={layoutId} label="筛选" className={className} />;
 }
 
 /**
@@ -87,8 +87,8 @@ export function FeedBar({ base, category, channel, tag = null }: { base: "/" | "
             label="看精选或全部"
             active={base === "/" ? "featured" : "all"}
             items={[
-              { key: "featured", label: "精选", to: scope("/"), resetScroll: true, prefetch: 'intent' },
-              { key: "all", label: "全部", to: scope("/all"), resetScroll: true, prefetch: 'intent' },
+              { key: "featured", label: "精选", to: scope("/"), resetScroll: true, prefetchOnPress: true },
+              { key: "all", label: "全部", to: scope("/all"), resetScroll: true, prefetchOnPress: true },
             ]}
           />
         }
@@ -121,10 +121,10 @@ function FilterSheet({ open, onClose, base, active }: { open: boolean; onClose: 
                 to={o.to}
                 onClick={onClose}
                 aria-current={on ? "true" : undefined}
-                className={`-mx-2 flex h-12 items-center justify-between rounded-tile px-2 text-[16px] transition-colors active:bg-bg-sunk ${on ? "font-semibold text-accent" : "text-ink"}`}
+                className={`-mx-2 rounded-tile px-2 ${sheetChoice(on)}`}
               >
                 {o.label}
-                {on && <IconCheck size={19} strokeWidth={2.2} />}
+                {on && <ChoiceTick />}
               </Link>
             </li>
           );
@@ -214,7 +214,7 @@ export function SearchField({ defaultValue = "", keep = {} }: { defaultValue?: s
         placeholder="搜索标题、摘要…"
         maxLength={200}
         autoComplete="off"
-        className="h-[42px] w-full rounded-full bg-bg-sunk pl-10 pr-10 text-[14px] text-ink outline-none ring-1 ring-inset ring-line-soft transition-[background-color,box-shadow] placeholder:text-ink-4 hover:ring-line-strong focus:bg-surface focus:shadow-[0_0_0_3px_var(--accent-soft)] focus:ring-accent dark:bg-bg-muted/60 dark:focus:bg-surface"
+        className="h-[42px] w-full rounded-full bg-well pl-10 pr-10 text-[14px] text-ink outline-none ring-1 ring-inset ring-line-soft transition-[background-color,box-shadow] placeholder:text-ink-4 hover:ring-line-strong focus:bg-surface focus:shadow-[0_0_0_3px_var(--accent-soft)] focus:ring-accent"
       />
       {value ? (
         <button

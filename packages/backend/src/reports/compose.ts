@@ -8,7 +8,7 @@ import { EDITION_TIMES, REPORTS, SITE } from "@aihot/site";
 import { PLAIN_TERMS, RELEASE, RESULT_SECTION, TEAM_ALIASES } from "@aihot/industry/taxonomy";
 import { promptText, promptVersion } from "../editorial/prompts.ts";
 import { modelFor } from "../editorial/models.ts";
-import { ENTITIES, isRelease } from "../editorial/vocabulary.ts";
+import { ENTITIES, entityNames, isRelease } from "../editorial/vocabulary.ts";
 import { addDays, beijingAt, beijingDate, beijingTime, isoWeekLabel, isoWeekRange, monthRange } from "@aihot/contracts/time";
 import { sql } from "../db.ts";
 import { logError } from "../lib/log-error.ts";
@@ -80,6 +80,12 @@ function windowPoint(at: Date): string {
   return `${Number(day.slice(5, 7))} 月 ${Number(day.slice(8, 10))} 日 ${beijingTime(at)}`;
 }
 
+/**
+ * Daily report for Beijing date D covers the 24 hours up to the site's edition time on D (EDITION_TIMES).
+ * Its most important entry leads, in its own words, and the next three are today's highlights. A window
+ * the editors judged with nothing new in it still has its issue: no entries, and a lead that says so
+ * (REPORTS.quiet).
+ */
 /** A finished match's row in the results section: the scoreline, and under it the feeds' write-up
  * of the match when they wrote one — its best report, which the row then links to as its detail
  * page. Without one the row is the score alone, linked to the score board; it is not a report, so
@@ -182,12 +188,6 @@ async function resultSection(date: string, start: Date, end: Date, issue: { main
   return items.length ? { label: cfg.label, items } : null;
 }
 
-/**
- * Daily report for Beijing date D covers the 24 hours up to the site's edition time on D (EDITION_TIMES).
- * Its most important entry leads, in its own words, and the next three are today's highlights. A window
- * the editors judged with nothing new in it still has its issue: no entries, and a lead that says so
- * (REPORTS.quiet).
- */
 export async function composeDaily(date: string, reason?: string): Promise<{ key: string; entries: number }> {
   const previous = await savedReport("daily", date);
   if (previous && reason === undefined) return { key: date, entries: previous.entries };
@@ -220,6 +220,14 @@ export async function composeDaily(date: string, reason?: string): Promise<{ key
   await saveReport("daily", date, start, end, content, reason, null, []);
   return { key: date, entries: issue.main.length };
 }
+
+/**
+ * A failing issue is retried with a growing pause and given up after this many tries
+ * (composeDueReports keeps the counters in settings).
+ */
+const COMPOSE_MAX_ATTEMPTS = 6;
+const COMPOSE_FAILURES_KEY = "reports.compose.failures";
+const composeBackoffMs = (count: number) => 30 * 60_000 * 2 ** (count - 1); // 30m, 1h, 2h, 4h, 8h, …
 
 /** A weekly's or monthly's size: the events it carries, chosen and ordered by rule. */
 const PERIOD_EVENTS = { weekly: 20, monthly: 30 } as const;
@@ -257,7 +265,7 @@ export function periodPrompt(kind: "weekly" | "monthly", startDate: string, endD
   };
 }
 
-const COMPANY_NAMES = Object.values(ENTITIES).map((e) => [e.name, ...e.aliases, ...(e.otherNames ?? [])].map((n) => n.toLowerCase()));
+const COMPANY_NAMES = Object.values(ENTITIES).map((e) => entityNames(e).map((n) => n.toLowerCase()));
 /** Words a writer may use that name nothing in particular: the pack's plain terms and the site's name. */
 const PLAIN = new Set([...PLAIN_TERMS, SITE.name.toLowerCase()]);
 
@@ -294,6 +302,7 @@ export function fitted(text: string, max: number): string | null {
  * only writes the overview and the introductions of sections with three or more events; text naming
  * anything the events do not name is not used, and overlong text keeps the leading sentences that fit.
  * Without a usable overview the issue is saved with none (see periodOverview).
+ * An automatic run skips a complete period of quiet dailies without publishing an empty issue.
  */
 async function composePeriod(kind: "weekly" | "monthly", key: string, startDate: string, endDateInclusive: string, reason: string | undefined) {
   const previous = await savedReport(kind, key);
@@ -301,9 +310,18 @@ async function composePeriod(kind: "weekly" | "monthly", key: string, startDate:
   // The dailies' windows run from the edition time the day before the first to that time on the last.
   const start = beijingAt(addDays(startDate, -1), EDITION_TIMES.daily);
   const end = beijingAt(endDateInclusive, EDITION_TIMES.daily);
-  const { entries, issues } = await periodEntries(startDate, endDateInclusive);
+  const { entries, issues, hasEntries } = await periodEntries(startDate, endDateInclusive);
   const top = entries.slice(0, PERIOD_EVENTS[kind]);
-  if (!top.length) throw new Error(`${kind} ${key}: no daily entries in the period`);
+  if (!top.length) {
+    if (reason === undefined && !hasEntries && issues > 0) {
+      // Before the site's first daily there was nothing to publish; missing later dailies are still a failure.
+      const [{ first }] = await sql<{ first: string | null }[]>`SELECT min(key) AS first FROM reports WHERE kind = 'daily'`;
+      const firstDate = first && first > startDate ? first : startDate;
+      const days = (Date.parse(endDateInclusive) - Date.parse(firstDate)) / 86400000 + 1;
+      if (issues === days) return null;
+    }
+    throw new Error(`${kind} ${key}: no daily entries in the period`);
+  }
   const selected = await candidates(start, end);
   const groups = SECTION_ORDER
     .map((label) => ({ label, items: top.filter((e) => sectionOf(e.category) === label) }))
@@ -396,47 +414,31 @@ const nextMonth = (label: string) => {
  * The newest one appears at the first run after it falls due (above); a long stop or an older gap is
  * filled too. A kind with no issue yet only gets its latest due one. An issue that fails does not hold
  * up the others; at most `limit` issues are written per run, the next run continues.
- *
- * Issues older than the data's first day can never compile (their windows hold no articles): they are
- * skipped outright instead of failing forever, and a later import moves the first day back, so skipped
- * issues return to the range on their own.
- *
- * A failing issue inside the data range is retried with a growing pause and given up after
- * COMPOSE_MAX_ATTEMPTS tries: the counters live in settings, the pause doubles per failure, and an
- * issue that succeeded clears its mark. Without this, an issue that keeps failing (a model outage, a
- * malformed window) is retried every half hour forever. A later success clears the mark; re-running
- * the compose once the cause is fixed revives the issue the same way.
  */
-const COMPOSE_MAX_ATTEMPTS = 6;
-const COMPOSE_FAILURES_KEY = "reports.compose.failures";
-const composeBackoffMs = (count: number) => 30 * 60_000 * 2 ** (count - 1); // 30m, 1h, 2h, 4h, 8h, …
-
-/** The issue key that holds a given day, per kind (labels compare in order within a kind). */
-const issueOf = (day: string, kind: ReportKind) =>
-  kind === "daily" ? day
-  : kind === "monthly" ? day.slice(0, 7)
-  : isoWeekLabel(day);
-
 export async function composeDueReports(now = new Date(), limit = 8): Promise<{ generated: string[]; failed: string[] }> {
   const generated: string[] = [];
   const failed: string[] = [];
+  // A failing issue is retried with a growing pause and given up after COMPOSE_MAX_ATTEMPTS tries:
+  // the counters live in settings, the pause doubles per failure, and an issue that succeeded clears
+  // its mark. Without this, an issue that keeps failing (a model outage, a malformed window) is
+  // retried every half hour forever; re-running the compose once the cause is fixed revives it.
   const failures = await sql<{ value: Record<string, { count: number; lastAt: string }> }[]>`SELECT value FROM settings WHERE key = ${COMPOSE_FAILURES_KEY}`
     .then((rows) => rows[0]?.value ?? {} as Record<string, { count: number; lastAt: string }>);
   let failuresChanged = false;
-  const [firstDay] = await sql<{ day: string | null }[]>`SELECT to_char(min(discovered_at) AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD') AS day FROM articles`;
-  const dataDay = firstDay?.day ?? null; // issues entirely before this day hold no articles, ever
-  const kinds: Array<{ kind: ReportKind; due: string; next: (k: string) => string; compose: (k: string) => Promise<unknown> }> = [
-    { kind: "daily", due: dueDaily(now), next: (k) => addDays(k, 1), compose: composeDaily },
-    { kind: "weekly", due: dueWeekly(now), next: nextWeek, compose: composeWeekly },
-    { kind: "monthly", due: dueMonthly(now), next: nextMonth, compose: composeMonthly },
+  const kinds: Array<{ kind: ReportKind; due: string; next: (k: string) => string; end: (k: string) => string; compose: (k: string) => Promise<unknown> }> = [
+    { kind: "daily", due: dueDaily(now), next: (k) => addDays(k, 1), end: (k) => k, compose: composeDaily },
+    { kind: "weekly", due: dueWeekly(now), next: nextWeek, end: (k) => isoWeekRange(k)!.end, compose: composeWeekly },
+    { kind: "monthly", due: dueMonthly(now), next: nextMonth, end: (k) => monthRange(k)!.end, compose: composeMonthly },
   ];
+  // Weeklies and monthlies sum up dailies: a period that ended before the site's first daily has nothing to sum
+  // up and is not due (a site started mid-month would otherwise fail that month's issue on every run).
+  const [{ first: firstDaily }] = await sql<{ first: string | null }[]>`SELECT min(key) AS first FROM reports WHERE kind = 'daily'`;
   kinds: for (const k of kinds) {
     const have = new Set((await sql<{ key: string }[]>`SELECT key FROM reports WHERE kind = ${k.kind}`).map((r) => r.key));
     const first = [...have].sort()[0] ?? k.due;
-    const dataKey = dataDay ? issueOf(dataDay, k.kind) : null; // the issue holding the data's first day; earlier ones are skipped
     for (let key = first; key <= k.due; key = k.next(key)) {
       if (have.has(key)) continue;
-      if (dataKey && key < dataKey) continue; // before any data exists: nothing to compile, and an import brings it back
+      if (k.kind !== "daily" && (!firstDaily || k.end(key) < firstDaily)) continue;
       if (shutdownSignal.signal.aborted || generated.length >= limit) break kinds;
       const failKey = `${k.kind}:${key}`;
       const failure = failures[failKey];
@@ -445,11 +447,12 @@ export async function composeDueReports(now = new Date(), limit = 8): Promise<{ 
         if (now.getTime() - Date.parse(failure.lastAt) < composeBackoffMs(failure.count)) continue; // waiting out the pause
       }
       try {
-        await k.compose(key);
-        generated.push(`${k.kind}:${key}`);
+        if (await k.compose(key) !== null) generated.push(`${k.kind}:${key}`);
         if (failure) delete failures[failKey];
         failuresChanged = failuresChanged || !!failure;
       } catch (error) {
+        // An issue interrupted by the stop is not a failure: it is written after the restart.
+        if (shutdownSignal.signal.aborted) break kinds;
         failed.push(`${k.kind}:${key}`);
         const count = (failure?.count ?? 0) + 1;
         failures[failKey] = { count, lastAt: new Date(now).toISOString() };

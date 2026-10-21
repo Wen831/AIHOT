@@ -4,7 +4,7 @@ import type { FastifyInstance } from "fastify";
 import { createHash } from "node:crypto";
 import { enqueue, QUEUES } from "@aihot/backend/jobs/queue";
 import { ImageBudgetExceeded, produceImage } from "@aihot/backend/media/images";
-import { verifyProxyRequest } from "@aihot/backend/media/imgproxy";
+import { LONGEST_CACHE_SECONDS, verifyProxyRequest } from "@aihot/backend/media/imgproxy";
 import { etagMatches, looseQuery } from "../http/respond.ts";
 
 function imageCacheControl(exp: string, limit: number): string {
@@ -43,7 +43,7 @@ export function registerMedia(app: FastifyInstance) {
       const etag = `"${createHash("sha256").update(type).update("\0").update(body).digest("hex")}"`;
       reply
         .header("Content-Type", type)
-        .header("Cache-Control", pendingAnimation && !queued ? "no-store" : imageCacheControl(q.exp!, pendingAnimation ? 60 : 7 * 86400))
+        .header("Cache-Control", pendingAnimation && !queued ? "no-store" : imageCacheControl(q.exp!, pendingAnimation ? 60 : LONGEST_CACHE_SECONDS))
         .header("ETag", etag)
         .header("X-Content-Type-Options", "nosniff")
         .header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox");
@@ -53,7 +53,7 @@ export function registerMedia(app: FastifyInstance) {
       if (error instanceof ImageBudgetExceeded) {
         return reply.code(503).header("Retry-After", "60").header("Cache-Control", "no-store").type("text/plain; charset=utf-8").send("Image proxy is busy; try again later");
       }
-      req.log.warn({ err: error, host: new URL(verdict.url).hostname }, "img-proxy upstream failed");
+      req.log.warn({ err: error, host: new URL(verdict.url).hostname, imageKey: createHash("sha256").update(verdict.url).digest("hex"), mode: verdict.mode }, "img-proxy upstream failed");
       return reply.code(502).header("Cache-Control", imageCacheControl(q.exp!, 60)).type("text/plain; charset=utf-8").send("Upstream image unavailable");
     }
   });
