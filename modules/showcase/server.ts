@@ -83,6 +83,9 @@ const analyze: NonNullable<ParticipationMode["analyze"]> = async (articleId, opt
 
 export const showcaseServer: ServerModule = {
   name: "showcase",
+  // Its sources' independence is the participation mode itself (no editorial judgement, no fact, so
+  // no shared display slot to keep): ServerModule.independentSelectedSources exempts selected
+  // reports from folding into their fact's seat — a problem these items, which never group, do not have.
   participationModes: {
     showcase: { shapeListing, afterListing, analyze },
   },
