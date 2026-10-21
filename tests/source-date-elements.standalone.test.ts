@@ -55,7 +55,7 @@ test("a scheme-less relative href still yields the date from the resolved URL pa
   // future, and the pipeline's future tolerance rejected every match-night brief found before
   // 07:00 Beijing time (36 undated on 2026-10-17).
   const listing = `<html><body><li><a href="zuqiu/2026-10-17/native1.htm">比赛短讯标题</a></li></body></html>`;
-  const items = fromHtml(listing, "https://news.zhibo8.com/zuqiu/", { config: { url: "https://news.zhibo8.com/zuqiu/", itemSelector: "li", publishedAtRegex: "(?:zhibo8\.com)?/zuqiu/(\d{4}-\d{2}-\d{2})/" } } as never);
+  const items = fromHtml(listing, "https://news.zhibo8.com/zuqiu/", { config: { url: "https://news.zhibo8.com/zuqiu/", itemSelector: "li", publishedAtRegex: "(?:zhibo8\\.com)?/zuqiu/(\\d{4}-\\d{2}-\\d{2})/" } } as never);
   assert.equal(items.length, 1);
   assert.equal(items[0]!.url, "https://news.zhibo8.com/zuqiu/zuqiu/2026-10-17/native1.htm");
   assert.equal(items[0]!.publishedAt?.toISOString(), "2026-10-16T16:00:00.000Z");
@@ -66,7 +66,7 @@ test("the URL fallback leaves already-matching href forms unchanged", () => {
     `<li><a href="/zuqiu/2026-10-17/2.htm">根相对短讯</a></li>` +
     `<li><a href="https://news.zhibo8.com/zuqiu/2026-10-16/3.htm">绝对地址短讯</a></li>` +
     `</body></html>`;
-  const items = fromHtml(listing, "https://news.zhibo8.com/zuqiu/", { config: { url: "https://news.zhibo8.com/zuqiu/", itemSelector: "li", publishedAtRegex: "(?:zhibo8\.com)?/zuqiu/(\d{4}-\d{2}-\d{2})/" } } as never);
+  const items = fromHtml(listing, "https://news.zhibo8.com/zuqiu/", { config: { url: "https://news.zhibo8.com/zuqiu/", itemSelector: "li", publishedAtRegex: "(?:zhibo8\\.com)?/zuqiu/(\\d{4}-\\d{2}-\\d{2})/" } } as never);
   assert.deepEqual(items.map((i) => i.publishedAt?.toISOString()),
     ["2026-10-16T16:00:00.000Z", "2026-10-15T16:00:00.000Z"]);
 });

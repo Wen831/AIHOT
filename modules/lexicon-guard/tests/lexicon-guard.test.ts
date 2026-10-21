@@ -44,6 +44,7 @@ test("an installed guard blocks the analysis run before any model step", async (
   try {
     const input = { title: "zqguardmark", excerpt: null, bodyText: null } as unknown as AnalyzeInputArticle;
     const run = await runAnalysis(input);
+    assert.ok(run.prefilter, "a guard verdict is a prefilter BLOCK, not a missing run");
     assert.equal(run.prefilter.label, "BLOCK");
     assert.equal(run.prefilter.reason, "lexicon:title");
     assert.equal(run.prefilter.model, "local-guard");
