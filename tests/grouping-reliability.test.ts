@@ -95,6 +95,25 @@ for (const composite of [false, true]) test(`a ${composite ? "roundup" : "single
   assert.equal(done!.grouping_error, null);
 });
 
+test("a content-filter refusal in grouping keeps the article on its own card, never failed", async () => {
+  const id = await report("content-filter");
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => String(input).startsWith(provider.url)
+    ? new Response(JSON.stringify({ type: "error", error: { type: "unprocessable_entity_error", message: "input new_sensitive (1027)", http_code: "422" } }), { status: 422, headers: { "content-type": "application/json" } })
+    : realFetch(input, init);
+  let verdict: string | undefined;
+  try { verdict = (await groupArticle(id)).verdict; } finally { globalThis.fetch = realFetch; }
+  assert.equal(verdict, "standalone", "the refusal degrades to a standalone card instead of throwing");
+  const [row] = await sql<{ grouping_status: string; grouping_error: string | null; selection_value_reason: string | null }[]>`
+    SELECT grouping_status, grouping_error, selection_value_reason FROM articles WHERE id=${id}`;
+  assert.equal(row!.grouping_status, "complete");
+  assert.equal(row!.grouping_error, null);
+  assert.ok(row!.selection_value_reason!.includes("供应商内容审核拒绝"), "the refusal is named as the selection reason");
+  assert.equal((await sql`SELECT 1 FROM fact_articles WHERE article_id=${id}`).length, 0, "no membership without a judgement");
+  const receipts = await sql<{ status: string }[]>`SELECT status FROM receipts WHERE purpose='group_article' AND subject LIKE ${`article:${id}%`}`;
+  assert.ok(receipts.length > 0 && receipts.every((receipt) => receipt.status === "failed"), "the refused receipt stays failed for evidence");
+});
+
 // The grouping decision and the paid result it consumes must commit together. Without this,
 // a failed completion can leave an article grouped while its paid response stays "received".
 for (const kind of ["report", "roundup", "kept"] as const) test(`receipt completion failure rolls back ${kind} grouping and recovery reuses the response`, async (t) => {

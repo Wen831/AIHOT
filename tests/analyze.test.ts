@@ -20,7 +20,7 @@ const X_SOURCE = `test-analyze-x-${T}`;
 
 interface Req { step: AnalysisStep; marker: string; user: string }
 const requests: Req[] = [];
-const MARKERS = ["CLEAR", "RESCUE", "LOW", "OFFTOPIC", "BARE", "VAGUE", "THIN", "SENSITIVE", "TOXIC", "推文", "WORDY", "REFUSAL", "RENUMBER", "UNMENDED"];
+const MARKERS = ["CLEAR", "RESCUE", "LOW", "OFFTOPIC", "BARE", "VAGUE", "THIN", "SENSITIVE", "TOXIC", "STRUCTSENSE", "推文", "WORDY", "REFUSAL", "RENUMBER", "UNMENDED"];
 // The scores sit a few points around the pack's T1 threshold and understand floor, so each case means
 // the same after a site recalibrates them: selected when the two add up to 2 × T1, written like a
 // selected item when they add up to more than 2 × FLOOR, translated otherwise.
@@ -28,7 +28,7 @@ const T1 = tierThreshold("T1")!;
 const FLOOR = UNDERSTAND_FLOOR;
 const scoreAnswers: Record<string, number[]> = {
   CLEAR: [T1 + 3, T1 - 1], RESCUE: [FLOOR + 1, FLOOR], LOW: [FLOOR, FLOOR - 1], THIN: [T1, T1], SENSITIVE: [T1, T1], 推文: [FLOOR, FLOOR],
-  BARE: [FLOOR - 2, FLOOR - 4], VAGUE: [T1, T1 + 2], WORDY: [T1, T1], REFUSAL: [T1, T1], RENUMBER: [T1, T1], UNMENDED: [T1, T1],
+  BARE: [FLOOR - 2, FLOOR - 4], VAGUE: [T1, T1 + 2], WORDY: [T1, T1], REFUSAL: [T1, T1], RENUMBER: [T1, T1], UNMENDED: [T1, T1], STRUCTSENSE: [T1, T1],
 };
 const WORDY = ["WORDY", "REFUSAL", "RENUMBER", "UNMENDED"];
 
@@ -54,7 +54,11 @@ const provider = await stub((_hit, req) => {
     if (WORDY.includes(marker)) return answer({ itemType: "transfer_deal", authorRole: "principal", tags: [], editorialJudgment: `理由里有禁用词 ${marker}`, titleZh: `标题里有禁用词 ${marker}`, summaryZh: `${marker} 的摘要。第二句补充 3 个数字。` });
     return answer({ itemType: "transfer_deal", authorRole: "principal", tags: ["转会官宣", "欧冠", "英超", "不存在的标签"], editorialJudgment: `理由 ${marker}`, titleZh: `理解标题 ${marker}`, summaryZh: `理解摘要 ${marker}。第二句补充一个关键数字。` });
   }
-  if (step === "structure") return answer({ category: "transfer", tags: ["转会官宣", "意甲"], subjects: ["real-madrid", "unknown-co"], scope: "single", fact: { title: `事实 ${marker}`, subject: "某俱乐部", action: "官宣", object: "新援", occurredAt: null, evidence: "a club signed a player", conditions: [] } });
+  if (step === "structure") {
+    // The provider's content filter refusing the structure step itself (on its input side).
+    if (marker === "STRUCTSENSE") return new Reply(422, { type: "error", error: { type: "unprocessable_entity_error", message: "input new_sensitive (1027)", http_code: "422" } });
+    return answer({ category: "transfer", tags: ["转会官宣", "意甲"], subjects: ["real-madrid", "unknown-co"], scope: "single", fact: { title: `事实 ${marker}`, subject: "某俱乐部", action: "官宣", object: "新援", occurredAt: null, evidence: "a club signed a player", conditions: [] } });
+  }
   // A refusal in a provider's own words: each provider words its own, and the same request would meet it again.
   if (step === "wording" && marker === "REFUSAL") return new Reply(400, { error: { message: "request refused", type: "invalid_request_error" } });
   if (step === "wording") {
@@ -259,4 +263,15 @@ test("analysing the same revision again reuses every paid answer", async () => {
   const again = await analyzeArticle(id);
   assert.equal(provider.hits(), hits, "no new requests");
   assert.deepEqual([again!.reused, again!.receiptIds], [true, first!.receiptIds]);
+});
+
+test("a structure step the provider's content filter refuses blocks the item, never a failed retry", async () => {
+  const id = await article("STRUCTSENSE");
+  const res = await analyzeArticle(id);
+  assert.equal(res!.output!.relevance, "block");
+  assert.deepEqual(calls("STRUCTSENSE").sort(), ["prefilter", "score", "score", "structure"], "no writing follows a structure refusal");
+  const r = await row(id);
+  assert.deepEqual([r.relevance, r.output.prefilter.reason, r.output.prefilter.label], ["block", "provider content filter", "BLOCK"], "the refusal overrides the passing prefilter");
+  const [state] = await sql<{ processing_state: string }[]>`SELECT processing_state FROM articles WHERE id = ${id}`;
+  assert.equal(state!.processing_state, "blocked");
 });

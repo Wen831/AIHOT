@@ -213,7 +213,9 @@ export interface AnalysisRun {
   structure: (ReturnType<typeof normalizeStructure> & { model: string; receiptId: number; reused: boolean }) | null;
 }
 
-const isContentFilter = (error: unknown) => failureKind(error) === "refused" && /contentFilter|"1301"|new_sensitive/.test((error as Error).message);
+/** A provider refusal that is its content filter answering, not an outage: MiniMax 422 `new_sensitive`,
+ *  Zhipu 400/1301. The same request would be refused again; grouping shares the check. */
+export const isContentFilter = (error: unknown) => failureKind(error) === "refused" && /contentFilter|"1301"|new_sensitive/.test((error as Error).message);
 
 /** Only a title or a feed summary, and a page to fetch: the article is judged on the page. */
 export function waitsForPage(a: AnalyzeInputArticle): boolean {
@@ -509,7 +511,15 @@ export async function runAnalysis(a: AnalyzeInputArticle, opts: StepOpts = {}): 
     const sum = scoreSum(scores);
     const near = scoresSelect(scores) || (sum !== null && sum > UNDERSTAND_FLOOR * SCORE_CALLS);
     const s = await structure;
-    if ("error" in s) throw s.error;
+    if ("error" in s) {
+      // The content filter refusing the structure step marks the material itself as sensitive: the
+      // item is blocked whole (like a prefilter BLOCK), not failed — the same request would be
+      // refused again. Scores that already ran stay on the analysis for diagnosis.
+      if (isContentFilter(s.error)) {
+        return { prefilter: { label: "BLOCK", reason: "provider content filter", model: "content-filter", receiptId: 0, reused: true }, scores, writing: null, structure: null };
+      }
+      throw s.error;
+    }
     const writing: NonNullable<AnalysisRun["writing"]> = original
       ? { kind: "verbatim", model: null, titleZh: original.title, summaryZh: original.summary ?? "", reasonZh: null, receiptIds: [], reused: true }
       : await mendWording(a, (near ? await runUnderstand(a, opts) : null) ?? (await runSummarize(a, opts)), opts);

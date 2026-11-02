@@ -16,6 +16,7 @@
 // story get another look when a report founds a fact close to them (rematchSignals); history
 // (isHistorical) founds no event. Runs serially (queue concurrency 1).
 import { modelFor, modelRoute } from "../editorial/models.ts";
+import { isContentFilter } from "../editorial/analyze.ts";
 import { beijingDate, beijingMidnight } from "@aihot/contracts/time";
 import { sql, type Db, type Tx } from "../db.ts";
 import { newShortId, newUuid } from "../lib/ids.ts";
@@ -251,6 +252,15 @@ export async function groupArticle(articleId: string, opts: GroupOptions = {}): 
     await publishArticle(articleId);
     return result;
   } catch (error) {
+    // The provider's content filter refuses to judge this article's grouping (MiniMax 422
+    // `new_sensitive`): the same request would be refused again, and the item has already passed
+    // analysis — it stays on its own card (the "insufficient material" precedent), not in the
+    // failure queue, with the refusal named as the selection reason.
+    if (isContentFilter(error)) {
+      await markGrouped(articleId, revision, { addsValue: false, reason: "供应商内容审核拒绝归组判定，按独立消息处理" });
+      await publishArticle(articleId);
+      return { verdict: "standalone" };
+    }
     // A late failed model call must not undo an editor's completed decision, or a fact already
     // committed before an optional downstream operation failed. Shutdown, budget waits and an unbilled
     // provider outage (every route rejected the request as retryable) leave work pending for the repair sweep.

@@ -88,6 +88,16 @@ async function contentCollection(now: number, open: AlertState): Promise<Finding
 /** Processing is checked while collection and models run, and while either of its incidents is open. */
 const watchingProcessing = (open: AlertState) => (collecting() && modelsOn()) || !!open["content.grouping"] || !!open["content.process"];
 
+/** Alert detail carries an error's shape (service, status, structured code), never the provider's
+ *  message body: rejection bodies have echoed request content before, and may again. Errors that are
+ *  not a provider's HTTP answer keep the usual cut — internal messages name no request content. */
+const errorTag = (error: string) => {
+  const m = /^(\w+ HTTP \d{3}): ([\s\S]*)$/.exec(error);
+  if (!m) return error.slice(0, 120);
+  const code = /"code":"([^"]*)"/.exec(m[2])?.[1];
+  return code ? `${m[1]} (${code})` : m[1];
+};
+
 async function selectedGrouping(now: number, open: AlertState): Promise<Finding[]> {
   if (!watchingProcessing(open)) return [];
   const waiting = (await waitingSelectedNews()).filter((item) => open["content.grouping"] || now - item.since.getTime() >= GROUPING_WARN_AFTER_MS);
@@ -103,7 +113,7 @@ async function selectedGrouping(now: number, open: AlertState): Promise<Finding[
     heals: manual ? `${manual} 条需要人工处理后才能恢复${manual < waiting.length ? "；其余仍在自动恢复" : ""}`
       : receipt ? "仍在等待自动恢复；付费结果未知的请求会在 30 分钟后自动放行一次" : "还会自动重试，但等待已经超过正常范围",
     action: manual ? "转给 AI 处理；核对计费，或在已有恢复授权内如实记录计费未知后放行" : "转给 AI 检查等待原因，避免继续积压",
-    detail: waiting.slice(0, 8).map((item) => `${item.articleId}${item.receiptId ? ` 回执 #${item.receiptId}` : ""}${item.error ? `：${item.error.slice(0, 120)}` : ""}`).join("；"),
+    detail: waiting.slice(0, 8).map((item) => `${item.articleId}${item.receiptId ? ` 回执 #${item.receiptId}` : ""}${item.error ? `：${errorTag(item.error)}` : ""}`).join("；"),
     since: waiting[0]!.since,
   }];
 }
@@ -128,7 +138,7 @@ async function contentProcessing(now: number, open: AlertState): Promise<Finding
     FROM articles WHERE ${unfinished}`;
   if (p!.waiting < 10 && p!.failed < 20 && !(incident && p!.waiting + p!.failed > 0)) return [];
   const errors = await sql<{ error: string; n: number }[]>`
-    SELECT left(coalesce(processing_error, '（无）'), 120) AS error, count(*)::int AS n FROM articles
+    SELECT left(coalesce(processing_error, '（无）'), 300) AS error, count(*)::int AS n FROM articles
     WHERE (${unfinished}) AND processing_error IS NOT NULL
     GROUP BY 1 ORDER BY 2 DESC LIMIT 3`;
   return [{
@@ -142,7 +152,7 @@ async function contentProcessing(now: number, open: AlertState): Promise<Finding
     heals: p!.failed > 0 ? "已失败的文章需要恢复处理；服务恢复不代表积压已经补齐" : "排队中的文章会继续处理，仍需核实是否完成",
     action: "转给 AI 处理",
     // Article age is useful detail; incident duration starts at first detection.
-    detail: [p!.oldest && `最老的一篇 ${beijingStamp(p!.oldest)} 收进`, errors.map((e) => `${e.error}（${e.n}）`).join("；") || "没有记录错误"].filter(Boolean).join("；"),
+    detail: [p!.oldest && `最老的一篇 ${beijingStamp(p!.oldest)} 收进`, errors.map((e) => `${errorTag(e.error)}（${e.n}）`).join("；") || "没有记录错误"].filter(Boolean).join("；"),
   }];
 }
 
